@@ -1,11 +1,11 @@
 {
-    "name": "tail_tap",
-    "short_name": "tail_tap",
+    "name": "TailTap",
+    "short_name": "TailTap",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "TailTap",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

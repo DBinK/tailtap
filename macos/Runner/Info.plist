@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+<key>FlutterDeepLinkingEnabled</key><false/>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>tailtap</string></array></dict></array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -28,5 +30,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSCameraUsageDescription</key>
+	<string>扫描 TailTap 连接卡二维码</string>
 </dict>
 </plist>

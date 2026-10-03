@@ -2,12 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+<key>FlutterDeepLinkingEnabled</key><false/>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>tailtap</string></array></dict></array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Tail Tap</string>
+	<string>TailTap</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +17,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>tail_tap</string>
+	<string>TailTap</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -43,7 +45,9 @@
 					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
 					<key>UISceneStoryboardFile</key>
 					<string>Main</string>
-				</dict>
+					<key>NSCameraUsageDescription</key>
+	<string>扫描 TailTap 连接卡二维码</string>
+</dict>
 			</array>
 		</dict>
 	</dict>
