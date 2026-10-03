@@ -28,6 +28,31 @@ class ConnectionConfig {
   final int port, localPort;
   final bool lan;
   String get title => name.isEmpty ? '${kind.label} · $port' : name;
+
+  ConnectionConfig copyWith({
+    String? mode,
+    ServiceKind? kind,
+    int? port,
+    String? host,
+    String? name,
+    String? address,
+    int? localPort,
+    bool? lan,
+    String? webScheme,
+    String? webPath,
+  }) => ConnectionConfig(
+    mode: mode ?? this.mode,
+    kind: kind ?? this.kind,
+    port: port ?? this.port,
+    host: host ?? this.host,
+    name: name ?? this.name,
+    address: address ?? this.address,
+    localPort: localPort ?? this.localPort,
+    lan: lan ?? this.lan,
+    webScheme: webScheme ?? this.webScheme,
+    webPath: webPath ?? this.webPath,
+  );
+
   Map<String, dynamic> toJson() => {
     'mode': mode,
     'kind': kind.name,
@@ -65,7 +90,25 @@ class ConnectionConfig {
     },
   ).toString();
   static ConnectionConfig parse(String input) {
-    input = input.trim();
+    input = input
+        .replaceAll(RegExp(r'&#(?:x20|32);', caseSensitive: false), ' ')
+        .trim();
+    final command = RegExp(
+      r'^tailcat\s+forward\s+(tc[A-Za-z0-9_-]{20,4096})\s+(\d{1,5})$',
+    ).firstMatch(input);
+    if (command != null) {
+      final port = int.parse(command.group(2)!);
+      if (port < 1 || port > 65535) {
+        throw const FormatException('远端端口范围为 1–65535');
+      }
+      return ConnectionConfig(
+        mode: 'connect',
+        kind: ServiceKind.port,
+        port: port,
+        localPort: 0,
+        address: command.group(1)!,
+      );
+    }
     if (RegExp(r'^tc[A-Za-z0-9_-]{20,4096}$').hasMatch(input)) {
       return ConnectionConfig(
         mode: 'connect',
@@ -76,7 +119,9 @@ class ConnectionConfig {
     }
     final uri = Uri.tryParse(input);
     if (uri == null || uri.scheme != 'tailtap' || uri.host != 'connect') {
-      throw const FormatException('请输入 TailTap 连接卡或原始 tailcat 地址');
+      throw const FormatException(
+        '请输入 TailTap 连接卡、Tailcat 地址或 tailcat forward 命令',
+      );
     }
     final q = uri.queryParameters;
     if (q['v'] != '1') {
@@ -108,7 +153,7 @@ class ConnectionConfig {
       mode: 'connect',
       kind: kind,
       port: port,
-      localPort: kind == ServiceKind.web ? 0 : port,
+      localPort: 0,
       address: address,
       name: q['name'] ?? '',
       webScheme: scheme,

@@ -24,6 +24,24 @@ void main() {
   test('raw address requires an explicit remote port', () {
     expect(ConnectionConfig.parse(addr).port, 0);
   });
+  test('forward commands accept copied HTML whitespace and validate ports', () {
+    final parsed = ConnectionConfig.parse('tailcat forward $addr 22&#x20;');
+    expect(parsed.address, addr);
+    expect(parsed.port, 22);
+    expect(parsed.localPort, 0);
+    expect(
+      () => ConnectionConfig.parse('tailcat forward $addr 0'),
+      throwsFormatException,
+    );
+    expect(
+      () => ConnectionConfig.parse('tailcat forward $addr 65536'),
+      throwsFormatException,
+    );
+    expect(
+      () => ConnectionConfig.parse('tailcat forward $addr 22; echo unsafe'),
+      throwsFormatException,
+    );
+  });
   test('unknown versions and invalid metadata are rejected', () {
     final card = const ConnectionConfig(
       mode: 'share',

@@ -15,8 +15,13 @@ class TunnelTask {
   final ConnectionConfig config;
   final DateTime started = DateTime.now();
   String state = 'starting', address = '', error = '', bind = '127.0.0.1';
+  String path = '核心未报告连接路径';
   int localPort = 0, clients = 0, up = 0, down = 0;
   bool? targetReady;
+  bool? tunnelReady;
+  DateTime? stopAt;
+  DateTime? ended;
+  Duration get duration => (ended ?? DateTime.now()).difference(started);
   Process? process;
   Timer? autoStop;
   final List<String> logs = [];
@@ -38,6 +43,11 @@ final tasksProvider = ChangeNotifierProvider<Tasks>((ref) => Tasks());
 
 class Tasks extends ChangeNotifier {
   Tasks() {
+    if (Platform.isMacOS) {
+      _tray.setMethodCallHandler((call) async {
+        if (call.method == 'stopAll') await stopAll();
+      });
+    }
     if (Platform.isAndroid) {
       _events = const EventChannel('dev.tailtap/events')
           .receiveBroadcastStream()
@@ -53,10 +63,12 @@ class Tasks extends ChangeNotifier {
   }
   StreamSubscription<dynamic>? _events;
   static const _channel = MethodChannel('dev.tailtap/core');
+  static const _tray = MethodChannel('dev.tailtap/tray');
   final List<TunnelTask> tasks = [];
   final List<ConnectionConfig> recent = [], favorites = [];
   String executable = '';
   bool loaded = false;
+  String? _lastTrayStatus;
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     executable = prefs.getString('corePath') ?? '';
@@ -101,6 +113,33 @@ class Tasks extends ChangeNotifier {
     );
   }
 
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    if (Platform.isMacOS) unawaited(_syncMacTray());
+  }
+
+  Future<void> _syncMacTray() async {
+    final active = tasks.where((task) => task.active).toList();
+    final first = active.firstOrNull;
+    final summary = first == null
+        ? ''
+        : '${first.config.title} · ${first.label}';
+    final signature = '${active.length}|$summary';
+    if (signature == _lastTrayStatus) return;
+    _lastTrayStatus = signature;
+    try {
+      await _tray.invokeMethod<void>('setStatus', {
+        'activeCount': active.length,
+        'summary': summary,
+      });
+    } on MissingPluginException {
+      // The macOS app may not have finished registering its status item yet.
+    } on PlatformException {
+      // Tray availability must not affect tunnel tasks.
+    }
+  }
+
   bool isFavorite(ConnectionConfig c) =>
       favorites.any((v) => v.encode() == c.encode());
   void favorite(ConnectionConfig c) {
@@ -118,6 +157,9 @@ class Tasks extends ChangeNotifier {
       DateTime.now().microsecondsSinceEpoch.toString(),
       config,
     );
+    if (minutes > 0) {
+      task.stopAt = DateTime.now().add(Duration(minutes: minutes));
+    }
     tasks.insert(0, task);
     notifyListeners();
     try {
@@ -181,6 +223,7 @@ class Tasks extends ChangeNotifier {
             }
           }
           task.autoStop?.cancel();
+          task.ended ??= DateTime.now();
           notifyListeners();
         }),
       );
@@ -195,6 +238,7 @@ class Tasks extends ChangeNotifier {
       }
     } catch (e) {
       task.state = 'failed';
+      task.ended = DateTime.now();
       task.error = e is FormatException
           ? e.message
           : e is PlatformException
@@ -212,16 +256,13 @@ class Tasks extends ChangeNotifier {
     }
 
     if (event['state'] != null) {
+      final previous = task.state;
       task.state = event['state'] as String;
       if (task.state == 'stopped') {
         task.address = '';
       }
-      task.logs.add(
-        '${DateTime.now().toIso8601String().substring(11, 19)}  ${task.label}',
-      );
-      if (task.logs.length > 100) {
-        task.logs.removeAt(0);
-      }
+      if (previous != task.state) _log(task, '状态 · ${task.label}');
+      if (!task.active) task.ended ??= DateTime.now();
     }
     task.address = event['address'] as String? ?? task.address;
     task.bind = event['bind'] as String? ?? task.bind;
@@ -230,10 +271,38 @@ class Tasks extends ChangeNotifier {
     task.up = event['up'] as int? ?? task.up;
     task.down = event['down'] as int? ?? task.down;
     if (event.containsKey('targetReady')) {
-      task.targetReady = event['targetReady'] as bool?;
+      final ready = event['targetReady'] as bool?;
+      if (ready != task.targetReady) {
+        _log(task, '目标服务 · ${ready == true ? '可用' : '暂不可用'}');
+      }
+      task.targetReady = ready;
     }
-    task.error = event['error'] as String? ?? task.error;
+    final reportedPath = event['path'] as String?;
+    if (reportedPath != null && reportedPath != 'unknown') {
+      task.path = reportedPath;
+    }
+    final reportedError = event['error'] as String?;
+    if (reportedError != null &&
+        reportedError.isNotEmpty &&
+        reportedError != task.error) {
+      _log(task, '错误 · $reportedError');
+    }
+    task.error = reportedError ?? task.error;
+    if (event.containsKey('tunnelReady')) {
+      final ready = event['tunnelReady'] as bool?;
+      if (ready != task.tunnelReady && ready == true) {
+        _log(task, '隧道 · 已连通');
+      }
+      task.tunnelReady = ready;
+    }
     notifyListeners();
+  }
+
+  void _log(TunnelTask task, String message) {
+    task.logs.add(
+      '${DateTime.now().toLocal().toIso8601String().substring(11, 19)}  $message',
+    );
+    if (task.logs.length > 100) task.logs.removeAt(0);
   }
 
   Future<void> stop(TunnelTask task) async {
@@ -241,6 +310,7 @@ class Tasks extends ChangeNotifier {
       return;
     }
     task.state = 'stopping';
+    _log(task, '正在停止任务');
     task.autoStop?.cancel();
     notifyListeners();
     if (Platform.isAndroid) {
@@ -248,11 +318,13 @@ class Tasks extends ChangeNotifier {
         await _channel.invokeMethod<void>('stop', {'id': task.id});
       } catch (e) {
         task.state = 'failed';
+        task.ended ??= DateTime.now();
         task.error = '停止未完成，请重试：$e';
         notifyListeners();
         return;
       }
       task.state = 'stopped';
+      task.ended ??= DateTime.now();
       task.address = '';
       notifyListeners();
       return;
@@ -268,12 +340,28 @@ class Tasks extends ChangeNotifier {
       }
     }
     task.state = 'stopped';
+    task.ended ??= DateTime.now();
     task.address = '';
     notifyListeners();
   }
 
   Future<void> stopAll() async {
     await Future.wait(tasks.where((t) => t.active).map(stop));
+  }
+
+  void remove(TunnelTask task) {
+    if (task.active) return;
+    task.autoStop?.cancel();
+    tasks.remove(task);
+    notifyListeners();
+  }
+
+  void clearFinished() {
+    for (final task in tasks.where((t) => !t.active)) {
+      task.autoStop?.cancel();
+    }
+    tasks.removeWhere((t) => !t.active);
+    notifyListeners();
   }
 
   @override
