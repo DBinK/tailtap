@@ -42,20 +42,28 @@ jobs:
           cache-dependency-path: core/go.sum
 
       - name: Install Flutter
+        if: matrix.platform != 'linux-arm64' && matrix.platform != 'windows-arm64'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.47.6
           channel: stable
           cache: true
 
+      - name: Install Flutter on ARM64 hosts
+        if: matrix.platform == 'linux-arm64' || matrix.platform == 'windows-arm64'
+        shell: bash
+        run: |
+          git clone --depth 1 --branch 3.47.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/flutter/bin:$PATH"
+          flutter --version
+
       - name: Install Android SDK and NDK
         if: matrix.platform == 'android-arm64'
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
-        if: matrix.platform == 'android-arm64'
         shell: bash
-        run: sdkmanager --install "ndk;28.2.13676358"
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --install "ndk;28.2.13676358"
 
       - name: Install Linux build dependencies
         if: startsWith(matrix.platform, 'linux-')
