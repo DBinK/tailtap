@@ -28,7 +28,7 @@ class TunnelService : Service() {
             val events = JSONArray(NativeCore.poll())
             for (i in 0 until events.length()) {
                 val json = JSONObject(events.getString(i))
-                val event = json.keys().asSequence().associateWith { key -> json.get(key).let { if(it == JSONObject.NULL) null else it } }
+                val event = json.keys().asSequence().associateWith { key -> nativeValue(json.get(key)) }
                 val id = event["id"] as? String ?: continue
                 synchronized(TunnelService::class.java) { snapshots[id] = (snapshots[id] ?: emptyMap()) + event }
                 sendEvent?.invoke(event)
@@ -89,4 +89,10 @@ class TunnelService : Service() {
         stopSelf()
     }
     override fun onBind(intent: Intent?): IBinder? = null
+    private fun nativeValue(value: Any?): Any? = when(value) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> value.keys().asSequence().associateWith { nativeValue(value.get(it)) }
+        is JSONArray -> (0 until value.length()).map { nativeValue(value.get(it)) }
+        else -> value
+    }
 }

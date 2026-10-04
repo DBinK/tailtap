@@ -5,4 +5,5 @@ object NativeCore {
     external fun start(id: String, config: String): String
     external fun stop(id: String): Int
     external fun poll(): String
+    external fun control(id: String, command: String): Int
 }

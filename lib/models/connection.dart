@@ -22,8 +22,10 @@ class ConnectionConfig {
     this.lan = false,
     this.webScheme = 'http',
     this.webPath = '/',
+    this.sshUser = '',
   });
   final String mode, host, name, address, webScheme, webPath;
+  final String sshUser;
   final ServiceKind kind;
   final int port, localPort;
   final bool lan;
@@ -40,6 +42,7 @@ class ConnectionConfig {
     bool? lan,
     String? webScheme,
     String? webPath,
+    String? sshUser,
   }) => ConnectionConfig(
     mode: mode ?? this.mode,
     kind: kind ?? this.kind,
@@ -51,6 +54,7 @@ class ConnectionConfig {
     lan: lan ?? this.lan,
     webScheme: webScheme ?? this.webScheme,
     webPath: webPath ?? this.webPath,
+    sshUser: sshUser ?? this.sshUser,
   );
 
   Map<String, dynamic> toJson() => {
@@ -64,6 +68,7 @@ class ConnectionConfig {
     'lan': lan,
     'webScheme': webScheme,
     'webPath': webPath,
+    'sshUser': sshUser,
   };
   factory ConnectionConfig.fromJson(Map<String, dynamic> j) => ConnectionConfig(
     mode: j['mode'] as String,
@@ -76,6 +81,7 @@ class ConnectionConfig {
     lan: j['lan'] as bool? ?? false,
     webScheme: j['webScheme'] as String? ?? 'http',
     webPath: j['webPath'] as String? ?? '/',
+    sshUser: j['sshUser'] as String? ?? '',
   );
   String card(String addr) => Uri(
     scheme: 'tailtap',
@@ -86,6 +92,7 @@ class ConnectionConfig {
       'kind': kind.name,
       'port': '$port',
       'name': title,
+      if (kind == ServiceKind.ssh && sshUser.isNotEmpty) 'user': sshUser,
       if (kind == ServiceKind.web) ...{'scheme': webScheme, 'path': webPath},
     },
   ).toString();
@@ -141,6 +148,10 @@ class ConnectionConfig {
     if (kind == null) {
       throw const FormatException('尚不支持此服务类型');
     }
+    final user = q['user'] ?? '';
+    if (user.isNotEmpty && !validSshUser(user)) {
+      throw const FormatException('SSH 用户名无效');
+    }
     final scheme = q['scheme'] ?? 'http';
     final path = q['path'] ?? '/';
     if (!['http', 'https'].contains(scheme) ||
@@ -156,10 +167,18 @@ class ConnectionConfig {
       localPort: 0,
       address: address,
       name: q['name'] ?? '',
+      sshUser: user,
       webScheme: scheme,
       webPath: path,
     );
   }
+
+  static bool validSshUser(String value) =>
+      RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_.$-]{0,63}$').hasMatch(value);
+
+  String sshCommand(int listenPort) => sshUser.isEmpty
+      ? 'ssh -p $listenPort <用户名>@127.0.0.1'
+      : "ssh -p $listenPort '$sshUser@127.0.0.1'";
 
   String encode() => jsonEncode(toJson());
 }

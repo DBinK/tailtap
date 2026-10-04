@@ -33,12 +33,21 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	commands := make(chan engine.Command, 8)
 	go func() {
 		for scanner.Scan() {
+			var command engine.Command
+			if json.Unmarshal(scanner.Bytes(), &command) == nil {
+				select {
+				case commands <- command:
+				case <-ctx.Done():
+					return
+				}
+			}
 		}
 		cancel()
 	}()
-	if err := engine.Run(ctx, c, emit); err != nil && ctx.Err() == nil {
+	if err := engine.RunControlled(ctx, c, emit, commands); err != nil && ctx.Err() == nil {
 		emit(map[string]any{"state": "failed", "error": err.Error()})
 		return
 	}

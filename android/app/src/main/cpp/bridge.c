@@ -1,5 +1,10 @@
 #include <jni.h>
 #include "libtailtap.h"
+JNIEXPORT jint JNICALL Java_dev_tailtap_app_NativeCore_control(JNIEnv *env,jobject self,jstring id,jstring command) {
+ const char *i=(*env)->GetStringUTFChars(env,id,0), *c=(*env)->GetStringUTFChars(env,command,0);
+ int result=ControlTask((char *)i,(char *)c);
+ (*env)->ReleaseStringUTFChars(env,id,i);(*env)->ReleaseStringUTFChars(env,command,c);return result;
+}
 JNIEXPORT jstring JNICALL Java_dev_tailtap_app_NativeCore_start(JNIEnv *env, jobject self, jstring id, jstring config) {
  const char *i=(*env)->GetStringUTFChars(env,id,0), *c=(*env)->GetStringUTFChars(env,config,0);
  char *result=StartTask((char *)i,(char *)c);

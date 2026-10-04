@@ -2,6 +2,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tail_tap/models/connection.dart';
 
 void main() {
+  test('SSH username survives card and stored configuration', () {
+    const config = ConnectionConfig(
+      mode: 'share',
+      kind: ServiceKind.ssh,
+      port: 22,
+      sshUser: 'binn',
+    );
+    final received = ConnectionConfig.parse(
+      config.card('tcABCDEFGHIJKLMNOPQRSTUV'),
+    );
+    expect(received.sshUser, 'binn');
+    expect(
+      received.copyWith(localPort: 2222).sshCommand(2222),
+      "ssh -p 2222 'binn@127.0.0.1'",
+    );
+    expect(ConnectionConfig.fromJson(config.toJson()).sshUser, 'binn');
+    expect(ConnectionConfig.validSshUser('user; touch /tmp/file'), isFalse);
+    expect(ConnectionConfig.validSshUser('-oProxyCommand'), isFalse);
+    expect(ConnectionConfig.validSshUser('binn'), isTrue);
+  });
   const addr = 'tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu';
   test('connection card round trips Unicode names and HTTPS paths', () {
     const config = ConnectionConfig(

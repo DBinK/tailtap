@@ -57,6 +57,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "snapshot" -> result.success(TunnelService.snapshot())
+                    "control" -> result.success(NativeCore.control(call.argument<String>("id")!!, JSONObject(call.argument<Map<String,Any?>>("command")!!).toString()) == 1)
                     else -> result.notImplemented()
                 }
             } catch(e: Throwable) { result.error("core",e.message ?: "原生核心不可用",null) }

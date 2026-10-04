@@ -16,6 +16,12 @@ class TunnelTask {
   final DateTime started = DateTime.now();
   String state = 'starting', address = '', error = '', bind = '127.0.0.1';
   String path = '核心未报告连接路径';
+  double? latencyMs;
+  DateTime? measuredAt;
+  String relay = '', diagnostic = '';
+  bool checkFailed = false, checking = false;
+  DateTime? diagnosticAt;
+  List<Map<String, dynamic>> peers = [];
   int localPort = 0, clients = 0, up = 0, down = 0;
   bool? targetReady;
   bool? tunnelReady;
@@ -59,7 +65,7 @@ class Tasks extends ChangeNotifier {
             }
           });
     }
-    load();
+    _loading = load();
   }
   StreamSubscription<dynamic>? _events;
   static const _channel = MethodChannel('dev.tailtap/core');
@@ -68,6 +74,7 @@ class Tasks extends ChangeNotifier {
   final List<ConnectionConfig> recent = [], favorites = [];
   String executable = '';
   bool loaded = false;
+  late final Future<void> _loading;
   String? _lastTrayStatus;
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -113,6 +120,58 @@ class Tasks extends ChangeNotifier {
     );
   }
 
+  String get coreExecutable {
+    final bundled =
+        '${File(Platform.resolvedExecutable).parent.path}/tailtap-core${Platform.isWindows ? '.exe' : ''}';
+    return executable.isNotEmpty
+        ? executable
+        : File(bundled).existsSync()
+        ? bundled
+        : '${Directory.current.path}/core/bin/tailtap-core${Platform.isWindows ? '.exe' : ''}';
+  }
+
+  Future<void> control(
+    TunnelTask task,
+    String action, {
+    bool visible = false,
+  }) async {
+    if (!task.active) return;
+    final requestTime = DateTime.now();
+    if (action == 'check') {
+      if (task.checking) return;
+      task.checking = true;
+      task.checkFailed = false;
+      task.diagnostic = '正在检查连接…';
+      task.diagnosticAt = requestTime;
+      notifyListeners();
+      Future<void>.delayed(const Duration(seconds: 20), () {
+        if (task.checking && task.diagnosticAt == requestTime) {
+          task.checking = false;
+          task.checkFailed = true;
+          task.diagnostic = '检查未完成，请重试';
+          notifyListeners();
+        }
+      });
+    }
+    final command = {'action': action, 'visible': visible};
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod<bool>('control', {
+          'id': task.id,
+          'command': command,
+        });
+      } else {
+        task.process?.stdin.writeln(jsonEncode(command));
+      }
+    } on StateError {
+      /* The process may have just closed. */
+    } on PlatformException {
+      /* Diagnostics must not stop a tunnel. */
+    } on MissingPluginException {
+      /* No native core in widget tests. */
+    }
+  }
+
   @override
   void notifyListeners() {
     super.notifyListeners();
@@ -153,6 +212,7 @@ class Tasks extends ChangeNotifier {
   }
 
   Future<TunnelTask> start(ConnectionConfig config, {int minutes = 0}) async {
+    await _loading;
     final task = TunnelTask(
       DateTime.now().microsecondsSinceEpoch.toString(),
       config,
@@ -163,10 +223,12 @@ class Tasks extends ChangeNotifier {
     tasks.insert(0, task);
     notifyListeners();
     try {
+      final coreConfig = {...config.toJson(), 'stopAfterSeconds': minutes * 60};
+      if (!task.active || task.state == 'stopping') return task;
       if (Platform.isAndroid) {
         await _channel.invokeMethod<void>('start', {
           'id': task.id,
-          'config': {...config.toJson(), 'stopAfterSeconds': minutes * 60},
+          'config': coreConfig,
         });
         recent.removeWhere((c) => c.encode() == config.encode());
         recent.insert(0, config);
@@ -195,9 +257,7 @@ class Tasks extends ChangeNotifier {
         process.kill();
         return task;
       }
-      process.stdin.writeln(
-        jsonEncode({...config.toJson(), 'stopAfterSeconds': minutes * 60}),
-      );
+      process.stdin.writeln(jsonEncode(coreConfig));
       process.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -273,13 +333,40 @@ class Tasks extends ChangeNotifier {
     if (event.containsKey('targetReady')) {
       final ready = event['targetReady'] as bool?;
       if (ready != task.targetReady) {
-        _log(task, '目标服务 · ${ready == true ? '可用' : '暂不可用'}');
+        _log(
+          task,
+          '目标服务 · ${ready == null
+              ? '尚未确认'
+              : ready
+              ? '可用'
+              : '暂不可用'}',
+        );
       }
       task.targetReady = ready;
     }
     final reportedPath = event['path'] as String?;
     if (reportedPath != null && reportedPath != 'unknown') {
+      if (reportedPath != task.path) _log(task, '路径 · $reportedPath');
       task.path = reportedPath;
+    }
+    task.latencyMs = (event['latencyMs'] as num?)?.toDouble() ?? task.latencyMs;
+    task.measuredAt =
+        DateTime.tryParse(event['measuredAt'] as String? ?? '') ??
+        task.measuredAt;
+    task.relay = event['relay'] as String? ?? task.relay;
+    task.checkFailed = event['checkFailed'] as bool? ?? task.checkFailed;
+    if (event['peers'] is List) {
+      task.peers = (event['peers'] as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    }
+    final diagnostic = event['diagnostic'] as String?;
+    if (diagnostic != null) {
+      final requested = task.checking;
+      if (requested || diagnostic != task.diagnostic) _log(task, diagnostic);
+      task.checking = false;
+      task.diagnostic = diagnostic;
+      task.diagnosticAt = DateTime.now();
     }
     final reportedError = event['error'] as String?;
     if (reportedError != null &&

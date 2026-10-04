@@ -14,8 +14,9 @@ import (
 )
 
 type task struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	commands chan engine.Command
+	cancel   context.CancelFunc
+	done     chan struct{}
 }
 
 var mu sync.Mutex
@@ -44,7 +45,7 @@ func StartTask(idRaw, configRaw *C.char) *C.char {
 		return C.CString(err.Error())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t := &task{cancel: cancel, done: make(chan struct{})}
+	t := &task{cancel: cancel, done: make(chan struct{}), commands: make(chan engine.Command, 8)}
 	mu.Lock()
 	if _, exists := tasks[id]; exists {
 		mu.Unlock()
@@ -55,11 +56,11 @@ func StartTask(idRaw, configRaw *C.char) *C.char {
 	mu.Unlock()
 	go func() {
 		defer close(t.done)
-		err := engine.Run(ctx, c, func(v map[string]any) {
+		err := engine.RunControlled(ctx, c, func(v map[string]any) {
 			if ctx.Err() == nil {
 				emit(id, v)
 			}
-		})
+		}, t.commands)
 		if err != nil && ctx.Err() == nil {
 			emit(id, map[string]any{"state": "failed", "error": err.Error()})
 		}
@@ -104,3 +105,23 @@ func PollEvents() *C.char {
 //export FreeString
 func FreeString(p *C.char) { C.free(unsafe.Pointer(p)) }
 func main()                {}
+
+//export ControlTask
+func ControlTask(idRaw, commandRaw *C.char) C.int {
+	mu.Lock()
+	t := tasks[C.GoString(idRaw)]
+	mu.Unlock()
+	if t == nil {
+		return 0
+	}
+	var command engine.Command
+	if json.Unmarshal([]byte(C.GoString(commandRaw)), &command) != nil {
+		return 0
+	}
+	select {
+	case t.commands <- command:
+		return 1
+	default:
+		return 0
+	}
+}

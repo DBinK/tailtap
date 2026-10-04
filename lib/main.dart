@@ -493,7 +493,7 @@ class TaskCard extends ConsumerWidget {
               Text(
                 sharing
                     ? '${t.config.host}:${t.config.port}'
-                    : '${t.localPort == 0 ? '准备本机监听' : t.localAddress} → 远端 :${t.config.port}',
+                    : '远端端口 ${t.config.port} → ${t.localPort == 0 ? '准备本机监听' : t.localAddress}',
                 style: const TextStyle(fontFamily: 'monospace'),
               ),
               const SizedBox(height: 8),
@@ -790,7 +790,8 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       local = TextEditingController(),
       name = TextEditingController(),
       entry = TextEditingController(),
-      webPath = TextEditingController(text: '/');
+      webPath = TextEditingController(text: '/'),
+      sshUser = TextEditingController();
   ServiceKind kind = ServiceKind.port;
   bool lan = false, parsed = false, rawAddress = false, busy = false;
   bool editingEntry = false;
@@ -800,6 +801,12 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
   @override
   void initState() {
     super.initState();
+    if (!widget.connect && !Platform.isAndroid) {
+      sshUser.text =
+          Platform.environment['USER'] ??
+          Platform.environment['USERNAME'] ??
+          '';
+    }
     if (widget.initial != null) {
       fill(widget.initial!);
     }
@@ -822,6 +829,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
     lan = c.lan;
     scheme = c.webScheme;
     webPath.text = c.webPath;
+    sshUser.text = c.sshUser;
     parsed = c.address.isNotEmpty;
     rawAddress = parsed && c.port == 0;
     if (parsed) {
@@ -863,7 +871,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
 
   @override
   void dispose() {
-    for (final c in [host, port, local, name, entry, webPath]) {
+    for (final c in [host, port, local, name, entry, webPath, sshUser]) {
       c.dispose();
     }
     super.dispose();
@@ -963,6 +971,12 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                 const SizedBox(height: 24),
                 Text('本机配置', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 16),
+                serviceKinds(),
+                if (kind == ServiceKind.ssh) ...[
+                  const SizedBox(height: 16),
+                  sshUserField(),
+                ],
+                const SizedBox(height: 16),
                 if (rawAddress) ...[
                   TextFormField(
                     controller: port,
@@ -985,28 +999,9 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                   validator: (s) => validatePort(s, optional: true),
                 ),
                 const SizedBox(height: 16),
-                ExpansionTile(
-                  title: const Text('更多选项'),
-                  shape: const Border(),
-                  collapsedShape: const Border(),
-                  childrenPadding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
-                  tilePadding: EdgeInsets.zero,
-                  expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    DropdownButtonFormField<ServiceKind>(
-                      initialValue: kind,
-                      decoration: const InputDecoration(labelText: '服务用途'),
-                      items: ServiceKind.values
-                          .map(
-                            (k) => DropdownMenuItem(
-                              value: k,
-                              child: Text(k.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) => setState(() => kind = value!),
-                    ),
-                    const SizedBox(height: 16),
                     if (!rawAddress) ...[
                       TextFormField(
                         controller: port,
@@ -1132,28 +1127,11 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 16),
-                    DropdownButtonFormField<ServiceKind>(
-                      initialValue: kind,
-                      decoration: const InputDecoration(labelText: '服务用途'),
-                      items: ServiceKind.values
-                          .map(
-                            (k) => DropdownMenuItem(
-                              value: k,
-                              child: Text(k.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) => setState(() {
-                        kind = v!;
-                        if (port.text.isEmpty) {
-                          port.text = kind == ServiceKind.ssh
-                              ? '22'
-                              : kind == ServiceKind.web
-                              ? '80'
-                              : '';
-                        }
-                      }),
-                    ),
+                    serviceKinds(),
+                    if (kind == ServiceKind.ssh) ...[
+                      const SizedBox(height: 16),
+                      sshUserField(),
+                    ],
                     const SizedBox(height: 16),
                     TextFormField(
                       controller: host,
@@ -1190,13 +1168,8 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                       onChanged: (v) => setState(() => minutes = v!),
                     ),
                     const SizedBox(height: 16),
-                    ExpansionTile(
-                      title: const Text('更多选项'),
-                      tilePadding: EdgeInsets.zero,
-                      shape: const Border(),
-                      collapsedShape: const Border(),
-                      childrenPadding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
-                      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         TextFormField(
                           controller: name,
@@ -1219,6 +1192,53 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
             ),
           ),
         );
+
+  Widget sshUserField() => TextFormField(
+    controller: sshUser,
+    decoration: const InputDecoration(
+      labelText: 'SSH 用户名（可选）',
+      hintText: '目标服务的登录用户名',
+    ),
+    validator: (value) =>
+        value == null ||
+            value.trim().isEmpty ||
+            ConnectionConfig.validSshUser(value.trim())
+        ? null
+        : '请输入有效的 SSH 用户名',
+  );
+
+  Widget serviceKinds() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text('服务用途', style: Theme.of(context).textTheme.labelLarge),
+      const SizedBox(height: 8),
+      SegmentedButton<ServiceKind>(
+        segments: ServiceKind.values
+            .map(
+              (value) => ButtonSegment(
+                value: value,
+                label: Text(value.label),
+                icon: Icon(kindIcon(value), size: 18),
+              ),
+            )
+            .toList(),
+        selected: {kind},
+        showSelectedIcon: false,
+        onSelectionChanged: busy
+            ? null
+            : (selection) => setState(() {
+                kind = selection.single;
+                if (!widget.connect && port.text.isEmpty) {
+                  port.text = kind == ServiceKind.ssh
+                      ? '22'
+                      : kind == ServiceKind.web
+                      ? '80'
+                      : '';
+                }
+              }),
+      ),
+    ],
+  );
 
   List<Widget> webFields() => [
     DropdownButtonFormField<String>(
@@ -1292,6 +1312,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       lan: lan,
       webScheme: scheme,
       webPath: webPath.text,
+      sshUser: kind == ServiceKind.ssh ? sshUser.text.trim() : '',
     );
     final t = await ref.read(tasksProvider).start(config, minutes: minutes);
     if (!mounted) return;
@@ -1312,12 +1333,25 @@ class TaskDetail extends ConsumerStatefulWidget {
   ConsumerState<TaskDetail> createState() => _TaskDetailState();
 }
 
-class _TaskDetailState extends ConsumerState<TaskDetail> {
+class _TaskDetailState extends ConsumerState<TaskDetail>
+    with WidgetsBindingObserver {
+  late final Tasks taskStore;
   bool opened = false, webOpened = false;
   Timer? clock;
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    taskStore = ref.read(tasksProvider);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(
+          ref
+              .read(tasksProvider)
+              .control(widget.task, 'visible', visible: true),
+        );
+      }
+    });
     clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && widget.task.active) setState(() {});
     });
@@ -1325,8 +1359,21 @@ class _TaskDetailState extends ConsumerState<TaskDetail> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(taskStore.control(widget.task, 'visible'));
     clock?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(
+      taskStore.control(
+        widget.task,
+        'visible',
+        visible: state == AppLifecycleState.resumed,
+      ),
+    );
   }
 
   String clockTime(DateTime time) =>
@@ -1473,7 +1520,7 @@ class _TaskDetailState extends ConsumerState<TaskDetail> {
                         SelectableText('目标 ${t.config.host}:${t.config.port}')
                       else ...[
                         SelectableText(
-                          '${t.active ? '本机' : '原本机'} ${t.localPort > 0 ? t.localAddress : '尚未分配'} → 远端 :${t.config.port}',
+                          '远端端口 ${t.config.port} → ${t.active ? '本机' : '原本机'} ${t.localPort > 0 ? t.localAddress : '尚未分配'}',
                         ),
                         if (t.state == 'running' && t.tunnelReady != true) ...[
                           const SizedBox(height: 8),
@@ -1492,16 +1539,14 @@ class _TaskDetailState extends ConsumerState<TaskDetail> {
                         Notice(t.error, error: true),
                       ],
                       const SizedBox(height: 12),
-                      if (t.targetReady != null)
-                        t.targetReady!
-                            ? const Text(
-                                '目标服务可用',
-                                style: TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 13,
-                                ),
-                              )
-                            : const Notice('目标服务暂不可用，请确认服务已启动。', error: true),
+                      const SizedBox(height: 12),
+                      Text(
+                        t.latencyMs == null
+                            ? t.path
+                            : '${t.path} · ${t.latencyMs!.toStringAsFixed(1)} ms',
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: green),
+                      ),
                       const SizedBox(height: 20),
                       const Divider(),
                       const SizedBox(height: 12),
@@ -1601,64 +1646,95 @@ class _TaskDetailState extends ConsumerState<TaskDetail> {
               const SizedBox(height: 24),
               Card(
                 margin: EdgeInsets.zero,
-                child: ExpansionTile(
-                  title: Row(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Expanded(child: Text('连接诊断')),
-                      IconButton(
-                        tooltip: '复制诊断（已隐藏连接凭据）',
-                        onPressed: () => copy(context, diagnosticSummary(t)),
-                        icon: const Icon(Icons.copy_rounded, size: 20),
+                      Row(
+                        children: [
+                          const Expanded(child: Text('连接诊断')),
+                          if (t.active)
+                            IconButton(
+                              tooltip: t.checking ? '正在检查连接' : '检查连接',
+                              onPressed: t.checking
+                                  ? null
+                                  : () => store.control(t, 'check'),
+                              icon: t.checking
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.refresh_rounded, size: 20),
+                            ),
+                          IconButton(
+                            tooltip: '复制诊断（已隐藏连接凭据）',
+                            onPressed: () =>
+                                copy(context, diagnosticSummary(t)),
+                            icon: const Icon(Icons.copy_rounded, size: 20),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      info('开始时间', clockTime(t.started)),
+                      if (t.ended != null) info('结束时间', clockTime(t.ended!)),
+                      info('连接路径', t.path == '核心未报告连接路径' ? '路径信息暂不可用' : t.path),
+                      if (t.latencyMs != null)
+                        info(
+                          '最近延迟',
+                          '${t.latencyMs!.toStringAsFixed(1)} ms · ${t.measuredAt == null ? '' : clockTime(t.measuredAt!.toLocal())} ${t.checkFailed || DateTime.now().difference(t.measuredAt ?? t.started).inSeconds > 30 ? '（上次测量）' : ''}',
+                        ),
+                      if (t.relay.isNotEmpty) info('中继区域', t.relay),
+                      if (t.targetReady != null) info('目标服务', targetLabel(t)),
+                      if (t.diagnostic.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Notice(
+                            '${t.diagnostic}${t.diagnosticAt == null || t.checking ? '' : ' · ${clockTime(t.diagnosticAt!)}'}',
+                            error: t.checkFailed,
+                          ),
+                        ),
+                      const SizedBox(height: 12),
+                      const Divider(),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '事件记录',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 240),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (t.logs.isEmpty)
+                                const Text(
+                                  '暂无关键事件',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              for (final log in t.logs)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 4,
+                                  ),
+                                  child: SelectableText(
+                                    log,
+                                    style: const TextStyle(
+                                      fontFamily: 'monospace',
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                  initiallyExpanded:
-                      t.state == 'failed' || t.state == 'conflict',
-                  shape: const Border(),
-                  collapsedShape: const Border(),
-                  expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
-                  childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                  children: [
-                    info('开始时间', clockTime(t.started)),
-                    if (t.ended != null) info('结束时间', clockTime(t.ended!)),
-                    info('连接路径', t.path == '核心未报告连接路径' ? '路径信息暂不可用' : t.path),
-                    const SizedBox(height: 12),
-                    const Divider(),
-                    const SizedBox(height: 12),
-                    const Text(
-                      '事件记录',
-                      style: TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                    const SizedBox(height: 8),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 240),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (t.logs.isEmpty)
-                              const Text(
-                                '暂无关键事件',
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            for (final log in t.logs)
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 4,
-                                ),
-                                child: SelectableText(
-                                  log,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ],
@@ -1693,7 +1769,7 @@ class _TaskDetailState extends ConsumerState<TaskDetail> {
           onPressed: () => copy(
             context,
             t.config.kind == ServiceKind.ssh
-                ? 'ssh -p ${t.localPort} <用户名>@127.0.0.1'
+                ? t.config.sshCommand(t.localPort)
                 : t.localAddress,
           ),
           icon: Icon(
@@ -1745,7 +1821,7 @@ class _TaskDetailState extends ConsumerState<TaskDetail> {
     '状态：${t.label}',
     '远端端口：${t.config.port}',
     if (t.config.mode == 'connect' && t.localPort > 0) '本机监听：${t.localAddress}',
-    '目标服务：${targetLabel(t)}',
+    if (t.targetReady != null) '目标服务：${targetLabel(t)}',
     '连接路径：${t.path}',
     if (t.error.isNotEmpty) '错误：${t.error}',
     ...t.logs,
@@ -1815,7 +1891,7 @@ class Settings extends ConsumerWidget {
             settingsEntry(
               context,
               icon: Icons.info_outline_rounded,
-              title: '关于与开源许可',
+              title: '关于',
               subtitle: 'TailTap、tailcat 上游信息和第三方许可',
               page: const AboutSettings(),
             ),
@@ -1991,7 +2067,7 @@ class AboutSettings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('关于与开源许可')),
+    appBar: AppBar(title: const Text('关于')),
     body: ListView(
       padding: const EdgeInsets.all(24),
       children: [

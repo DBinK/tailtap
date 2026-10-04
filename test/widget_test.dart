@@ -30,8 +30,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('端口 · 22'), findsOneWidget);
         expect(find.text('服务名称和用途由发送方提供，不代表已验证对方身份。请确认连接卡来源。'), findsOneWidget);
-        await tester.tap(find.text('更多选项'));
-        await tester.pumpAndSettle();
+        expect(find.text('更多选项'), findsNothing);
         expect(tester.takeException(), isNull);
         expect(find.text('留空自动分配端口'), findsOneWidget);
         expect(find.text('更换连接入口'), findsOneWidget);
@@ -74,7 +73,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(TaskCard), findsNothing);
-      expect(find.text('本机 127.0.0.1:2222 → 远端 :22'), findsOneWidget);
+      expect(find.text('远端端口 22 → 本机 127.0.0.1:2222'), findsOneWidget);
       expect(find.text('停止任务'), findsOneWidget);
       await tester.tap(find.text('连接诊断'));
       await tester.pumpAndSettle();

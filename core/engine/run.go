@@ -6,6 +6,7 @@ import (
 	"github.com/tailscale/tailcat"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -32,11 +33,27 @@ func Validate(c Config) error {
 	}
 	if c.Mode == "connect" {
 		_, err := tailcat.ParseAddr(tailcat.Addr(c.Address))
-		return err
+		if err != nil {
+			return fmt.Errorf("连接地址无效")
+		}
+		return nil
 	}
 	return nil
 }
+
+type Command struct {
+	Action  string `json:"action"`
+	Visible bool   `json:"visible"`
+}
+
 func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
+	return RunControlled(ctx, c, emit, nil)
+}
+
+func RunControlled(ctx context.Context, c Config, emit func(map[string]any), commands <-chan Command) error {
+	if err := Validate(c); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if c.StopAfterSeconds > 0 {
@@ -60,22 +77,34 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 	discard := func(string, ...any) {}
 	var active atomic.Int64
 	var up, down atomic.Int64
+	var connectionsMu sync.Mutex
+	connections := make(map[net.Conn]bool)
+	defer func() {
+		connectionsMu.Lock()
+		defer connectionsMu.Unlock()
+		for connection := range connections {
+			connection.Close()
+		}
+	}()
 	proxy := func(a, b net.Conn) {
+		connectionsMu.Lock()
+		connections[a] = true
+		connections[b] = true
+		connectionsMu.Unlock()
+		defer func() { connectionsMu.Lock(); delete(connections, a); delete(connections, b); connectionsMu.Unlock() }()
 		active.Add(1)
 		defer active.Add(-1)
 		defer a.Close()
 		defer b.Close()
 		done := make(chan struct{})
 		go func() {
-			n, _ := io.Copy(b, a)
-			up.Add(n)
+			_, _ = io.Copy(countWriter{b, &up}, a)
 			if t, ok := b.(interface{ CloseWrite() error }); ok {
 				_ = t.CloseWrite()
 			}
 			close(done)
 		}()
-		n, _ := io.Copy(a, b)
-		down.Add(n)
+		_, _ = io.Copy(countWriter{a, &down}, b)
 		if t, ok := a.(interface{ CloseWrite() error }); ok {
 			_ = t.CloseWrite()
 		}
@@ -121,7 +150,33 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		state("sharing", map[string]any{"address": string(server.TailcatAddr()), "path": "unknown"})
+		state("sharing", map[string]any{"address": string(server.TailcatAddr()), "path": "等待设备连接"})
+		report := func() {
+			peers := []map[string]any{}
+			direct, relay := 0, 0
+			status := server.Status()
+			if status != nil {
+				for public, peer := range status.Peer {
+					if !peer.Active {
+						continue
+					}
+					path := "未知"
+					if peer.CurAddr != "" {
+						path = "直连"
+						direct++
+					} else if peer.Relay != "" {
+						path = "中继"
+						relay++
+					}
+					peers = append(peers, map[string]any{"public": public.String(), "path": path, "relay": peer.Relay})
+				}
+			}
+			path := "等待设备连接"
+			if len(peers) > 0 {
+				path = fmt.Sprintf("%d 台设备 · %d 台直连 · %d 台中继", len(peers), direct, relay)
+			}
+			emit(map[string]any{"path": path, "peers": peers})
+		}
 		check := func() {
 			s, err := net.DialTimeout("tcp", target, 2*time.Second)
 			if err == nil {
@@ -130,6 +185,7 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 			emit(map[string]any{"targetReady": err == nil})
 		}
 		check()
+		report()
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -138,6 +194,13 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 				return nil
 			case <-ticker.C:
 				check()
+				report()
+			case command := <-commands:
+				if command.Action == "check" || command.Action == "direct" {
+					check()
+					report()
+					emit(map[string]any{"diagnostic": "分享端已检查目标与设备路径"})
+				}
 			}
 		}
 	}
@@ -153,6 +216,7 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 	defer ln.Close()
 	client := &tailcat.Client{Server: tailcat.Addr(c.Address), Logf: discard}
 	defer client.Close()
+	go diagnose(ctx, client, commands, emit)
 	state("waiting", map[string]any{"localPort": ln.Addr().(*net.TCPAddr).Port, "bind": bind, "path": "unknown"})
 	go func() { <-ctx.Done(); ln.Close() }()
 	go func() {
@@ -164,7 +228,7 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 				return
 			}
 			if err != nil {
-				state("waiting", map[string]any{"targetReady": false, "error": "远端服务暂不可用"})
+				state("waiting", map[string]any{"targetReady": nil, "error": "无法连接远端，请检查网络和分享状态"})
 				return
 			}
 			remote.Close()
