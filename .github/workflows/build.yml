@@ -63,7 +63,9 @@ jobs:
         shell: bash
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
           yes | "$sdkmanager" --licenses >/dev/null
+          set -o pipefail
           "$sdkmanager" --install "ndk;28.2.13676358"
 
       - name: Install Linux build dependencies
