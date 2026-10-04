@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/connection.dart';
@@ -115,8 +116,60 @@ class Tasks extends ChangeNotifier {
         /* No native service is running. */
       }
     }
+    await _sweepStaleStagingDirectories();
     loaded = true;
     notifyListeners();
+  }
+
+  /// Removes staging directories left behind by tasks that ended without a
+  /// Flutter-side cleanup, such as a stop from the Android notification or a
+  /// killed process.
+  Future<void> _sweepStaleStagingDirectories() async {
+    final referenced = <String>{
+      for (final task in tasks)
+        if (task.config.filesDir.isNotEmpty) task.config.filesDir,
+      for (final task in tasks)
+        ...task.fileProgress.values
+            .map((progress) => progress['directory'] as String?)
+            .whereType<String>(),
+    };
+    final taskIds = tasks.map((task) => task.id).toSet();
+    final roots = <Directory>[];
+    try {
+      final support = await getApplicationSupportDirectory();
+      roots.add(
+        Directory('${support.path}${Platform.pathSeparator}tailtap-shares'),
+      );
+      final temporary = await getTemporaryDirectory();
+      roots.add(
+        Directory('${temporary.path}${Platform.pathSeparator}tailtap-received'),
+      );
+    } catch (_) {
+      return; // Staging directories are unavailable on this platform.
+    }
+    // Anything staged in the last minute belongs to the current session and
+    // may not be referenced by a task yet. Leftovers from earlier runs are
+    // still older than that, so the guard costs at most one delayed sweep.
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 1));
+    for (final root in roots) {
+      try {
+        if (!await root.exists()) continue;
+        await for (final entry in root.list()) {
+          if (entry is! Directory) continue;
+          final name = entry.path.split(Platform.pathSeparator).last;
+          final owner = name.contains('-')
+              ? name.substring(0, name.indexOf('-'))
+              : '';
+          if (referenced.contains(entry.path) || taskIds.contains(owner)) {
+            continue;
+          }
+          if ((await entry.stat()).modified.isAfter(cutoff)) continue;
+          await entry.delete(recursive: true);
+        }
+      } catch (_) {
+        // A leftover directory must not block startup.
+      }
+    }
   }
 
   Future<void> save() async {
@@ -355,7 +408,9 @@ class Tasks extends ChangeNotifier {
     if (event['state'] != null) {
       final previous = task.state;
       task.state = event['state'] as String;
-      if (task.state == 'failed') unawaited(_cleanupTaskFiles(task));
+      // Every way a task can end must release its staged copies, including a
+      // stop issued from the Android notification without a Dart call.
+      if (!task.active) unawaited(_cleanupTaskFiles(task));
       if (task.state == 'stopped') {
         task.address = '';
         task.transferActive = false;
@@ -621,6 +676,7 @@ class Tasks extends ChangeNotifier {
     for (final t in tasks) {
       t.autoStop?.cancel();
       t.process?.kill();
+      unawaited(_cleanupTaskFiles(t).catchError((_) {}));
     }
     super.dispose();
   }
