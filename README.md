@@ -31,16 +31,25 @@ TailTap 是一个用于分享和连接 TCP 服务的桌面与 Android 应用。�
 先安装 Flutter 与 Go，再在仓库根目录执行：
 
 ```sh
-flutter pub get
-./scripts/build-android-core.sh arm64-v8a
-flutter build apk --release --target-platform android-arm64 --split-per-abi
+./scripts/build-android.sh
 ```
 
 macOS 构建使用：
 
 ```sh
-./scripts/build-desktop.sh --release
+./scripts/build-desktop.sh
 ```
+
+两个脚本默认构建 arm64 Debug，包含依赖安装和核心编译。添加 `--release` 构建发布版，添加 `--x86_64` 构建 x86_64 版，参数可以组合：
+
+```sh
+./scripts/build-android.sh --x86_64 --release
+./scripts/build-desktop.sh --x86_64 --release
+```
+
+Android APK 输出到 `build/app/outputs/flutter-apk/`。macOS 应用输出到 `build/macos/Build/Products/Debug/TailTap.app` 或 `Release/TailTap.app`。Android 构建需要 NDK，路径可通过 `ANDROID_NDK_HOME` 指定。
+
+GitHub Actions 会在默认分支有新提交时构建 macOS arm64 与 Android arm64 发布包。也可以在仓库的 **Actions → Build desktop and Android packages → Run workflow** 手动启动，并选择单个平台或全部平台。完成后从对应运行记录的 **Artifacts** 下载构建包。产物使用 `tailtap_<版本>_<系统>_arm64` 命名；macOS 为 ZIP，Android 为 APK。
 
 本机连接测试脚本位于 `scripts/`，使用 `uv run scripts/test_device.py <adb-device-id>` 可运行 Android 隧道集成测试。跨设备测试需要连接的 Android 设备和已配置的 Termux SSH 主机。
 

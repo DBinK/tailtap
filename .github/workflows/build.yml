@@ -1,0 +1,84 @@
+name: Build desktop and Android packages
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform package to build
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-arm64
+          - android-arm64
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    if: >-
+      github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.platform != 'all') && format('["{0}"]', inputs.platform) || '["macos-arm64","android-arm64"]') }}
+    runs-on: ${{ matrix.platform == 'macos-arm64' && 'macos-15' || 'ubuntu-latest' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.6
+          channel: stable
+          cache: true
+
+      - name: Install Android SDK and NDK
+        if: matrix.platform == 'android-arm64'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        if: matrix.platform == 'android-arm64'
+        shell: bash
+        run: sdkmanager --install "ndk;28.2.13676358"
+
+      - name: Build Android package
+        if: matrix.platform == 'android-arm64'
+        shell: bash
+        run: |
+          flutter pub get
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" sh scripts/build-android-core.sh arm64-v8a
+          flutter build apk --release --target-platform android-arm64 --split-per-abi
+          version="$(awk '/^version:/ { sub(/^version:[[:space:]]*/, ""); sub(/\+.*/, ""); print; exit }' pubspec.yaml)"
+          archive="tailtap_${version}_android_arm64.apk"
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "build/$archive"
+          echo "PACKAGE=$archive" >> "$GITHUB_ENV"
+
+      - name: Build macOS package
+        if: matrix.platform == 'macos-arm64'
+        shell: bash
+        run: |
+          ./scripts/build-desktop.sh --release --arm64
+          version="$(awk '/^version:/ { sub(/^version:[[:space:]]*/, ""); sub(/\+.*/, ""); print; exit }' pubspec.yaml)"
+          archive="tailtap_${version}_darwin_arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/TailTap.app "build/$archive"
+          echo "PACKAGE=$archive" >> "$GITHUB_ENV"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: build/${{ env.PACKAGE }}
+          if-no-files-found: error
+          retention-days: 30
