@@ -615,12 +615,13 @@ Future<void> shareCard(BuildContext context, TunnelTask t) async {
   if (wide) {
     await showDialog<void>(
       context: context,
-      builder: (_) => Dialog(
+      builder: (dialogContext) => Dialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 800),
-          child: SingleChildScrollView(
-            child: ShareCardContent(task: t, card: card),
+          child: SizedBox(
+            height: MediaQuery.sizeOf(dialogContext).height * .9,
+            child: ShareCardContent(task: t, card: card, compact: true),
           ),
         ),
       ),
@@ -635,25 +636,34 @@ Future<void> shareCard(BuildContext context, TunnelTask t) async {
         maxHeight: MediaQuery.sizeOf(context).height * .9,
       ),
       builder: (_) => SafeArea(
-        child: SingleChildScrollView(
-          child: ShareCardContent(task: t, card: card),
-        ),
+        child: ShareCardContent(task: t, card: card, compact: true),
       ),
     );
   }
 }
 
 class ShareCardContent extends StatelessWidget {
-  const ShareCardContent({super.key, required this.task, required this.card});
+  const ShareCardContent({
+    super.key,
+    required this.task,
+    required this.card,
+    this.compact = false,
+  });
   final TunnelTask task;
   final String card;
+  final bool compact;
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final wide = constraints.maxWidth >= 720;
+      final narrowHeight = MediaQuery.sizeOf(context).height;
       final qr = QrImageView(
         data: card,
-        size: wide ? 320 : (constraints.maxWidth - 48).clamp(160, 240),
+        size: wide
+            ? 320
+            : compact
+            ? (narrowHeight * .27).clamp(140, 200)
+            : (constraints.maxWidth - 48).clamp(160, 240),
         padding: const EdgeInsets.all(12),
         backgroundColor: Colors.white,
       );
@@ -680,17 +690,43 @@ class ShareCardContent extends StatelessWidget {
                 ? '用另一台设备的 TailTap 扫码，查看并下载这些文件。'
                 : '用另一台设备的 TailTap 扫码，或将连接卡粘贴到“连接服务”。',
           ),
-          if (task.config.kind == ServiceKind.file)
-            for (final entity in Directory(task.config.filesDir).listSync())
-              if (entity is File)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '${entity.uri.pathSegments.last} · ${formatBytes(entity.lengthSync())}',
-                  ),
+          if (task.config.kind == ServiceKind.file) ...[
+            const SizedBox(height: 12),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 168),
+              decoration: BoxDecoration(
+                color: const Color(0xfff3f5f1),
+                border: Border.all(color: const Color(0xffdce4de)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Scrollbar(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  children: [
+                    for (final entity in Directory(
+                      task.config.filesDir,
+                    ).listSync())
+                      if (entity is File)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.insert_drive_file_outlined),
+                          title: Text(
+                            entity.uri.pathSegments.last,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Text(formatBytes(entity.lengthSync())),
+                        ),
+                  ],
                 ),
-          const SizedBox(height: 8),
-          const Notice('请只分享给可信的人。停止分享后，连接卡会立即失效。'),
+              ),
+            ),
+          ],
+          if (task.config.kind != ServiceKind.file) ...[
+            const SizedBox(height: 8),
+            const Notice('请只分享给可信的人。停止分享后，连接卡会立即失效。'),
+          ],
           if (task.targetReady == false) ...[
             const SizedBox(height: 8),
             const Notice('目标服务暂不可用，请确认服务已启动。', error: true),
@@ -717,14 +753,13 @@ class ShareCardContent extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          if (task.config.kind != ServiceKind.file)
-            FilledButton.tonalIcon(
-              onPressed: () => copy(context, task.address),
-              icon: const Icon(Icons.link, size: 18),
-              label: const Text('复制原始地址'),
-            ),
-          const SizedBox(height: 8),
-          if (task.config.kind != ServiceKind.file)
+          FilledButton.tonalIcon(
+            onPressed: () => copy(context, task.address),
+            icon: const Icon(Icons.link, size: 18),
+            label: const Text('复制原始地址'),
+          ),
+          if (task.config.kind != ServiceKind.file) ...[
+            const SizedBox(height: 8),
             FilledButton.tonalIcon(
               onPressed: () => copy(
                 context,
@@ -733,6 +768,7 @@ class ShareCardContent extends StatelessWidget {
               icon: const Icon(Icons.terminal, size: 18),
               label: const Text('复制 Tailcat 命令'),
             ),
+          ],
           const SizedBox(height: 8),
           FilledButton.icon(
             onPressed: () => copy(context, card),
@@ -777,10 +813,19 @@ class ShareCardContent extends StatelessWidget {
                 ],
               )
             else ...[
-              text,
-              const SizedBox(height: 16),
-              Center(child: qr),
-              const SizedBox(height: 20),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      text,
+                      const SizedBox(height: 16),
+                      Center(child: qr),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               buttons,
             ],
           ],
@@ -1214,46 +1259,58 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                         icon: const Icon(Icons.add),
                         label: const Text('选择文件'),
                       ),
-                      for (final file in pickedFiles)
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.insert_drive_file_outlined),
-                          title: Text(
-                            file.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                      if (pickedFiles.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 220),
+                          decoration: BoxDecoration(
+                            color: const Color(0xfff3f5f1),
+                            border: Border.all(color: const Color(0xffdce4de)),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                          subtitle: Text(formatBytes(file.lengthSync() ?? 0)),
-                          trailing: IconButton(
-                            tooltip: '移除',
-                            onPressed: busy
-                                ? null
-                                : () =>
-                                      setState(() => pickedFiles.remove(file)),
-                            icon: const Icon(Icons.close),
+                          child: Scrollbar(
+                            child: ListView(
+                              shrinkWrap: true,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              children: [
+                                for (final file in pickedFiles)
+                                  ListTile(
+                                    dense: true,
+                                    visualDensity: const VisualDensity(
+                                      vertical: -2,
+                                    ),
+                                    leading: const Icon(
+                                      Icons.insert_drive_file_outlined,
+                                    ),
+                                    title: Text(
+                                      file.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          formatBytes(file.lengthSync() ?? 0),
+                                        ),
+                                        IconButton(
+                                          tooltip: '移除',
+                                          onPressed: busy
+                                              ? null
+                                              : () => setState(
+                                                  () =>
+                                                      pickedFiles.remove(file),
+                                                ),
+                                          icon: const Icon(Icons.close),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
-                      TextFormField(
-                        controller: name,
-                        decoration: const InputDecoration(
-                          labelText: '名称（可选）',
-                          hintText: '为这次文件分享取个名称',
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      DropdownButtonFormField<int>(
-                        initialValue: minutes,
-                        decoration: const InputDecoration(labelText: '自动停止分享'),
-                        items: [0, 15, 30, 60]
-                            .map(
-                              (m) => DropdownMenuItem(
-                                value: m,
-                                child: Text(m == 0 ? '手动停止' : '$m 分钟后'),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) => setState(() => minutes = v!),
-                      ),
+                      ],
                     ] else ...[
                       if (kind == ServiceKind.ssh) ...[
                         const SizedBox(height: 16),
@@ -1452,7 +1509,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       kind: kind,
       port: p,
       host: kind == ServiceKind.file ? '' : host.text.trim(),
-      name: name.text.trim(),
+      name: kind == ServiceKind.file ? '' : name.text.trim(),
       address: address,
       localPort: local.text.isEmpty
           ? (widget.connect ? 0 : p)
@@ -1463,7 +1520,9 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       sshUser: kind == ServiceKind.ssh ? sshUser.text.trim() : '',
       filesDir: filesDir,
     );
-    final t = await ref.read(tasksProvider).start(config, minutes: minutes);
+    final t = await ref
+        .read(tasksProvider)
+        .start(config, minutes: kind == ServiceKind.file ? 0 : minutes);
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
@@ -1681,16 +1740,51 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
                             Text(
                               '只读分享 · ${Directory(t.config.filesDir).existsSync() ? Directory(t.config.filesDir).listSync().whereType<File>().length : 0} 个文件',
                             ),
-                            if (Directory(t.config.filesDir).existsSync())
-                              for (final file in Directory(
-                                t.config.filesDir,
-                              ).listSync().whereType<File>())
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Text(
-                                    '${file.uri.pathSegments.last} · ${formatBytes(file.lengthSync())}',
+                            if (Directory(t.config.filesDir).existsSync()) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                constraints: const BoxConstraints(
+                                  maxHeight: 220,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xfff3f5f1),
+                                  border: Border.all(
+                                    color: const Color(0xffdce4de),
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Scrollbar(
+                                  child: ListView(
+                                    shrinkWrap: true,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 4,
+                                    ),
+                                    children: [
+                                      for (final file in Directory(
+                                        t.config.filesDir,
+                                      ).listSync().whereType<File>())
+                                        ListTile(
+                                          dense: true,
+                                          visualDensity: const VisualDensity(
+                                            vertical: -2,
+                                          ),
+                                          leading: const Icon(
+                                            Icons.insert_drive_file_outlined,
+                                          ),
+                                          title: Text(
+                                            file.uri.pathSegments.last,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          trailing: Text(
+                                            formatBytes(file.lengthSync()),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ),
+                              ),
+                            ],
                           ],
                         )
                       else if (t.config.mode == 'share')
@@ -2044,25 +2138,88 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
                     : const Icon(Icons.download_outlined),
                 label: const Text('接收所选文件'),
               ),
-              for (final progress in task.fileProgress.values)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    task.downloadedFiles.contains(progress['name'])
-                        ? '已保存：${progress['name']}'
-                        : task.savingFiles.contains(progress['name'])
-                        ? '正在保存：${progress['name']}'
-                        : task.fileErrors.containsKey(progress['name'])
-                        ? '失败：${progress['name']} · ${task.fileErrors[progress['name']]}'
-                        : !task.transferActive
-                        ? '已中断：${progress['name']} · ${formatBytes(progress['copied'] as int? ?? 0)} / ${formatBytes(progress['size'] as int? ?? 0)}'
-                        : '正在接收：${progress['name']} · ${formatBytes(progress['copied'] as int? ?? 0)} / ${formatBytes(progress['size'] as int? ?? 0)}',
-                  ),
-                ),
+              if (task.transferActive || task.fileProgress.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _transferProgress(task),
+              ],
             ],
           ],
         ),
       ),
+    );
+  }
+
+  Widget _transferProgress(TunnelTask task) {
+    final selectedNames = selectedFiles.difference(task.downloadedFiles);
+    final trackingNames = selectedNames.isEmpty && task.transferActive
+        ? task.files.map((file) => file['name'] as String).toSet()
+        : selectedNames;
+    final selectedFilesInfo = task.files
+        .where((file) => trackingNames.contains(file['name']))
+        .toList();
+    final totalBytes = selectedFilesInfo.fold<int>(
+      0,
+      (sum, file) => sum + (file['size'] as int? ?? 0),
+    );
+    final progressItems = task.fileProgress.values
+        .where((item) => trackingNames.contains(item['name']))
+        .toList();
+    final completedBytes = progressItems.fold<int>(
+      0,
+      (sum, item) => sum + (item['copied'] as int? ?? 0),
+    );
+    Map<String, dynamic>? current;
+    for (final item in progressItems) {
+      final name = item['name'];
+      if (!task.downloadedFiles.contains(name) &&
+          !task.fileErrors.containsKey(name) &&
+          (item['copied'] as int? ?? 0) < (item['size'] as int? ?? 0)) {
+        current = item;
+        break;
+      }
+    }
+    final currentCopied = current?['copied'] as int? ?? 0;
+    final currentSize = current?['size'] as int? ?? 0;
+    double fraction(int value, int total) =>
+        total <= 0 ? 0 : (value / total).clamp(0.0, 1.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '总进度 · ${formatBytes(completedBytes)} / ${formatBytes(totalBytes)}',
+        ),
+        const SizedBox(height: 6),
+        LinearProgressIndicator(
+          value: task.transferActive ? fraction(completedBytes, totalBytes) : 1,
+        ),
+        if (current != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            '当前文件 · ${current['name']} · ${formatBytes(currentCopied)} / ${formatBytes(currentSize)}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 6),
+          LinearProgressIndicator(value: fraction(currentCopied, currentSize)),
+        ],
+        for (final progress in progressItems)
+          if (task.downloadedFiles.contains(progress['name']) ||
+              task.savingFiles.contains(progress['name']) ||
+              task.fileErrors.containsKey(progress['name']) ||
+              !task.transferActive)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                task.downloadedFiles.contains(progress['name'])
+                    ? '已保存：${progress['name']}'
+                    : task.savingFiles.contains(progress['name'])
+                    ? '正在保存：${progress['name']}'
+                    : task.fileErrors.containsKey(progress['name'])
+                    ? '失败：${progress['name']} · ${task.fileErrors[progress['name']]}'
+                    : '已中断：${progress['name']} · ${formatBytes(progress['copied'] as int? ?? 0)} / ${formatBytes(progress['size'] as int? ?? 0)}',
+              ),
+            ),
+      ],
     );
   }
 

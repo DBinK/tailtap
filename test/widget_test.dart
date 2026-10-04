@@ -82,6 +82,77 @@ void main() {
       await tester.pumpAndSettle();
     }
   });
+  testWidgets('Desktop breakpoints avoid layout overflow', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    for (final size in [
+      const Size(720, 600),
+      const Size(720, 480),
+      const Size(680, 600),
+      const Size(640, 600),
+      const Size(600, 600),
+      const Size(560, 600),
+      const Size(500, 600),
+    ]) {
+      tester.view.physicalSize = size;
+      final task =
+          TunnelTask(
+              'small-window',
+              const ConnectionConfig(
+                mode: 'connect',
+                kind: ServiceKind.port,
+                port: 22,
+              ),
+            )
+            ..state = 'running'
+            ..localPort = 2222;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [tasksProvider.overrideWith((ref) => Tasks())],
+          child: MaterialApp(home: TaskDetail(task: task)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'TaskDetail at $size');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(home: ServiceEditor(connect: false)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Share form at $size');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(home: ServiceEditor(connect: true)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Connect form at $size');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: MyApp())),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Home at $size');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: Settings())),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Settings at $size');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  });
   test('Repeated status snapshots do not duplicate events and end time stays fixed', () async {
     final store = Tasks();
     while (!store.loaded) {
@@ -147,6 +218,9 @@ void main() {
           shareY < addressY && addressY < commandY && commandY < cardY,
           isTrue,
         );
+        if (width == 320) {
+          expect(cardY - commandY, lessThan(70));
+        }
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pumpAndSettle();
       }
@@ -218,6 +292,17 @@ void main() {
     await tester.tap(find.text('连接服务'));
     await tester.pumpAndSettle();
     expect(find.text('扫描二维码'), findsOneWidget);
+  });
+  testWidgets('File share setup hides optional fields', (tester) async {
+    await tester.pumpWidget(const ProviderScope(child: MyApp()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('分享服务'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('文件'));
+    await tester.pumpAndSettle();
+    expect(find.text('名称（可选）'), findsNothing);
+    expect(find.text('自动停止分享'), findsNothing);
+    expect(find.text('选择文件'), findsOneWidget);
   });
   testWidgets('Invalid pasted entry remains editable and never starts', (
     tester,
