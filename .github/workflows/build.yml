@@ -62,8 +62,9 @@ jobs:
         if: matrix.platform == 'android-arm64'
         shell: bash
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --licenses >/dev/null
-          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --install "ndk;28.2.13676358"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "ndk;28.2.13676358"
 
       - name: Install Linux build dependencies
         if: startsWith(matrix.platform, 'linux-')
