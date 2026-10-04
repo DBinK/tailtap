@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:app_links/app_links.dart';
+import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -125,6 +127,7 @@ IconData kindIcon(ServiceKind kind) => switch (kind) {
   ServiceKind.port => Icons.swap_horiz_rounded,
   ServiceKind.ssh => Icons.terminal_rounded,
   ServiceKind.web => Icons.language_rounded,
+  ServiceKind.file => Icons.folder_outlined,
 };
 
 class Home extends ConsumerWidget {
@@ -612,12 +615,13 @@ Future<void> shareCard(BuildContext context, TunnelTask t) async {
   if (wide) {
     await showDialog<void>(
       context: context,
-      builder: (_) => Dialog(
+      builder: (dialogContext) => Dialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 800),
-          child: SingleChildScrollView(
-            child: ShareCardContent(task: t, card: card),
+          child: SizedBox(
+            height: MediaQuery.sizeOf(dialogContext).height * .9,
+            child: ShareCardContent(task: t, card: card, compact: true),
           ),
         ),
       ),
@@ -632,25 +636,34 @@ Future<void> shareCard(BuildContext context, TunnelTask t) async {
         maxHeight: MediaQuery.sizeOf(context).height * .9,
       ),
       builder: (_) => SafeArea(
-        child: SingleChildScrollView(
-          child: ShareCardContent(task: t, card: card),
-        ),
+        child: ShareCardContent(task: t, card: card, compact: true),
       ),
     );
   }
 }
 
 class ShareCardContent extends StatelessWidget {
-  const ShareCardContent({super.key, required this.task, required this.card});
+  const ShareCardContent({
+    super.key,
+    required this.task,
+    required this.card,
+    this.compact = false,
+  });
   final TunnelTask task;
   final String card;
+  final bool compact;
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final wide = constraints.maxWidth >= 720;
+      final narrowHeight = MediaQuery.sizeOf(context).height;
       final qr = QrImageView(
         data: card,
-        size: wide ? 320 : (constraints.maxWidth - 48).clamp(160, 240),
+        size: wide
+            ? 320
+            : compact
+            ? (narrowHeight * .27).clamp(140, 200)
+            : (constraints.maxWidth - 48).clamp(160, 240),
         padding: const EdgeInsets.all(12),
         backgroundColor: Colors.white,
       );
@@ -658,20 +671,62 @@ class ShareCardContent extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            task.config.name.isEmpty
+            task.config.kind == ServiceKind.file
+                ? (task.config.name.isEmpty ? '文件分享' : task.config.name)
+                : task.config.name.isEmpty
                 ? '服务：${task.config.kind.label} · ${task.config.port}'
                 : '服务：${task.config.name}',
             style: Theme.of(context).textTheme.titleMedium,
           ),
-          if (task.config.name.isNotEmpty)
+          if (task.config.kind != ServiceKind.file &&
+              task.config.name.isNotEmpty)
             Text(
               '${task.config.kind.label} · ${task.config.port}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           const SizedBox(height: 8),
-          const Text('用另一台设备的 TailTap 扫码，或将连接卡粘贴到“连接服务”。'),
-          const SizedBox(height: 8),
-          const Notice('仅分享给可信的人，停止分享后连接卡失效。'),
+          Text(
+            task.config.kind == ServiceKind.file
+                ? '用另一台设备的 TailTap 扫码，查看并下载这些文件。'
+                : '用另一台设备的 TailTap 扫码，或将连接卡粘贴到“连接服务”。',
+          ),
+          if (task.config.kind == ServiceKind.file) ...[
+            const SizedBox(height: 12),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 168),
+              decoration: BoxDecoration(
+                color: const Color(0xfff3f5f1),
+                border: Border.all(color: const Color(0xffdce4de)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Scrollbar(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  children: [
+                    for (final entity in Directory(
+                      task.config.filesDir,
+                    ).listSync())
+                      if (entity is File)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.insert_drive_file_outlined),
+                          title: Text(
+                            entity.uri.pathSegments.last,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Text(formatBytes(entity.lengthSync())),
+                        ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          if (task.config.kind != ServiceKind.file) ...[
+            const SizedBox(height: 8),
+            const Notice('请只分享给可信的人。停止分享后，连接卡会立即失效。'),
+          ],
           if (task.targetReady == false) ...[
             const SizedBox(height: 8),
             const Notice('目标服务暂不可用，请确认服务已启动。', error: true),
@@ -703,15 +758,17 @@ class ShareCardContent extends StatelessWidget {
             icon: const Icon(Icons.link, size: 18),
             label: const Text('复制原始地址'),
           ),
-          const SizedBox(height: 8),
-          FilledButton.tonalIcon(
-            onPressed: () => copy(
-              context,
-              'tailcat forward ${task.address} ${task.config.port}',
+          if (task.config.kind != ServiceKind.file) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: () => copy(
+                context,
+                'tailcat forward ${task.address} ${task.config.port}',
+              ),
+              icon: const Icon(Icons.terminal, size: 18),
+              label: const Text('复制 Tailcat 命令'),
             ),
-            icon: const Icon(Icons.terminal, size: 18),
-            label: const Text('复制 Tailcat 命令'),
-          ),
+          ],
           const SizedBox(height: 8),
           FilledButton.icon(
             onPressed: () => copy(context, card),
@@ -730,7 +787,7 @@ class ShareCardContent extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    '分享连接卡',
+                    task.config.kind == ServiceKind.file ? '分享文件' : '分享连接卡',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
@@ -756,10 +813,19 @@ class ShareCardContent extends StatelessWidget {
                 ],
               )
             else ...[
-              text,
-              const SizedBox(height: 16),
-              Center(child: qr),
-              const SizedBox(height: 20),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      text,
+                      const SizedBox(height: 16),
+                      Center(child: qr),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               buttons,
             ],
           ],
@@ -797,6 +863,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
   bool editingEntry = false;
   String? error;
   String address = '', scheme = 'http';
+  List<PlatformFile> pickedFiles = [];
   int minutes = 0;
   @override
   void initState() {
@@ -867,6 +934,53 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
     if (value == null || !mounted) return;
     entry.text = value;
     parse();
+  }
+
+  Future<void> chooseFiles() async {
+    final result = await FilePicker.pickFiles();
+    if (result.isEmpty || !mounted) return;
+    final available = result;
+    setState(() {
+      for (final file in available) {
+        if (!pickedFiles.any((current) => current.path == file.path)) {
+          pickedFiles.add(file);
+        }
+      }
+    });
+  }
+
+  Future<String> stageFiles() async {
+    final root = await getApplicationSupportDirectory();
+    final dir = Directory(
+      '${root.path}${Platform.pathSeparator}tailtap-shares${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await dir.create(recursive: true);
+    try {
+      final used = <String>{};
+      for (final picked in pickedFiles) {
+        final original = picked.name.replaceAll(RegExp(r'[/\\\x00]'), '_');
+        var target = original.isEmpty ? 'file' : original;
+        final dot = target.lastIndexOf('.');
+        final stem = dot > 0 ? target.substring(0, dot) : target;
+        final suffix = dot > 0 ? target.substring(dot) : '';
+        var index = 2;
+        while (!used.add(target)) {
+          target = '$stem ($index)$suffix';
+          index++;
+        }
+        final output = File('${dir.path}${Platform.pathSeparator}$target')
+            .openWrite();
+        try {
+          await output.addStream(picked.readAsByteStream());
+        } finally {
+          await output.close();
+        }
+      }
+    } catch (_) {
+      await dir.delete(recursive: true);
+      rethrow;
+    }
+    return dir.path;
   }
 
   @override
@@ -971,106 +1085,114 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                 const SizedBox(height: 24),
                 Text('本机配置', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 16),
-                serviceKinds(),
-                if (kind == ServiceKind.ssh) ...[
+                serviceKinds(lockFile: kind == ServiceKind.file && parsed),
+                if (kind == ServiceKind.file) ...[
                   const SizedBox(height: 16),
-                  sshUserField(),
-                ],
-                const SizedBox(height: 16),
-                if (rawAddress) ...[
+                  const Notice('连接后可浏览发送方分享的文件，文件只读；选择文件后可保存到本机。'),
+                  const SizedBox(height: 24),
+                  editorAction(context, '查看共享文件'),
+                ] else ...[
+                  if (kind == ServiceKind.ssh) ...[
+                    const SizedBox(height: 16),
+                    sshUserField(),
+                  ],
+                  const SizedBox(height: 16),
+                  if (rawAddress) ...[
+                    TextFormField(
+                      controller: port,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '远端端口',
+                        hintText: '请输入要访问的服务端口',
+                      ),
+                      validator: validatePort,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   TextFormField(
-                    controller: port,
+                    controller: local,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
-                      labelText: '远端端口',
-                      hintText: '请输入要访问的服务端口',
+                      labelText: '本机端口',
+                      hintText: '留空自动分配端口',
                     ),
-                    validator: validatePort,
+                    validator: (s) => validatePort(s, optional: true),
                   ),
                   const SizedBox(height: 16),
-                ],
-                TextFormField(
-                  controller: local,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: '本机端口',
-                    hintText: '留空自动分配端口',
-                  ),
-                  validator: (s) => validatePort(s, optional: true),
-                ),
-                const SizedBox(height: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (!rawAddress) ...[
-                      TextFormField(
-                        controller: port,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(labelText: '远端端口'),
-                        validator: validatePort,
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    TextFormField(
-                      controller: name,
-                      decoration: const InputDecoration(
-                        labelText: '名称（可选）',
-                        hintText: '为这个连接取一个名称',
-                      ),
-                    ),
-                    if (kind == ServiceKind.web) ...[
-                      const SizedBox(height: 16),
-                      DropdownButtonFormField<String>(
-                        initialValue: scheme,
-                        decoration: const InputDecoration(labelText: '网页协议'),
-                        items: ['http', 'https']
-                            .map(
-                              (v) => DropdownMenuItem(value: v, child: Text(v)),
-                            )
-                            .toList(),
-                        onChanged: (v) => scheme = v!,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: webPath,
-                        decoration: const InputDecoration(
-                          labelText: '浏览器打开路径',
-                          helperText: '默认 /，仅决定浏览器打开的页面。',
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (!rawAddress) ...[
+                        TextFormField(
+                          controller: port,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(labelText: '远端端口'),
+                          validator: validatePort,
                         ),
-                        validator: (s) =>
-                            s == null ||
-                                !s.startsWith('/') ||
-                                s.startsWith('//') ||
-                                s.contains('\\')
-                            ? '请输入以 / 开始的本机路径'
-                            : null,
+                        const SizedBox(height: 16),
+                      ],
+                      TextFormField(
+                        controller: name,
+                        decoration: const InputDecoration(
+                          labelText: '名称（可选）',
+                          hintText: '为这个连接取一个名称',
+                        ),
+                      ),
+                      if (kind == ServiceKind.web) ...[
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          initialValue: scheme,
+                          decoration: const InputDecoration(labelText: '网页协议'),
+                          items: ['http', 'https']
+                              .map(
+                                (v) =>
+                                    DropdownMenuItem(value: v, child: Text(v)),
+                              )
+                              .toList(),
+                          onChanged: (v) => scheme = v!,
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: webPath,
+                          decoration: const InputDecoration(
+                            labelText: '浏览器打开路径',
+                            helperText: '默认 /，仅决定浏览器打开的页面。',
+                          ),
+                          validator: (s) =>
+                              s == null ||
+                                  !s.startsWith('/') ||
+                                  s.startsWith('//') ||
+                                  s.contains('\\')
+                              ? '请输入以 / 开始的本机路径'
+                              : null,
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      formSwitch(
+                        title: '允许局域网访问',
+                        subtitle: '局域网设备可访问此本机端口。',
+                        value: lan,
+                        onChanged: (v) => setState(() => lan = v),
                       ),
                     ],
-                    const SizedBox(height: 16),
-                    formSwitch(
-                      title: '允许局域网访问',
-                      subtitle: '局域网设备可访问此本机端口。',
-                      value: lan,
-                      onChanged: (v) => setState(() => lan = v),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final button = FilledButton.icon(
-                      onPressed: busy ? null : start,
-                      icon: const Icon(Icons.arrow_forward),
-                      label: const Text('连接'),
-                    );
-                    return constraints.maxWidth < 400
-                        ? SizedBox(width: double.infinity, child: button)
-                        : Align(
-                            alignment: Alignment.centerRight,
-                            child: button,
-                          );
-                  },
-                ),
+                  ),
+                  const SizedBox(height: 24),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final button = FilledButton.icon(
+                        onPressed: busy ? null : start,
+                        icon: const Icon(Icons.arrow_forward),
+                        label: const Text('连接'),
+                      );
+                      return constraints.maxWidth < 400
+                          ? SizedBox(width: double.infinity, child: button)
+                          : Align(
+                              alignment: Alignment.centerRight,
+                              child: button,
+                            );
+                    },
+                  ),
+                ],
               ],
             ],
           ),
@@ -1128,62 +1250,126 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                     ),
                     const SizedBox(height: 16),
                     serviceKinds(),
-                    if (kind == ServiceKind.ssh) ...[
+                    if (kind == ServiceKind.file) ...[
                       const SizedBox(height: 16),
-                      sshUserField(),
-                    ],
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: host,
-                      decoration: const InputDecoration(
-                        labelText: '目标地址',
-                        hintText: '127.0.0.1 或设备的 IP 地址',
+                      const Notice('选择要发送的文件。文件会复制到临时只读目录，只能由持有连接卡的设备下载。'),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: busy ? null : chooseFiles,
+                        icon: const Icon(Icons.add),
+                        label: const Text('选择文件'),
                       ),
-                      validator: (s) =>
-                          s == null || s.trim().isEmpty ? '请输入 IP 或主机名' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: port,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: '目标端口',
-                        hintText: '例如 22 或 8080',
-                      ),
-                      validator: validatePort,
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<int>(
-                      initialValue: minutes,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: '自动停止分享'),
-                      items: [0, 15, 30, 60]
-                          .map(
-                            (m) => DropdownMenuItem(
-                              value: m,
-                              child: Text(m == 0 ? '手动停止' : '$m 分钟后'),
+                      if (pickedFiles.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 220),
+                          decoration: BoxDecoration(
+                            color: const Color(0xfff3f5f1),
+                            border: Border.all(color: const Color(0xffdce4de)),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Scrollbar(
+                            child: ListView(
+                              shrinkWrap: true,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              children: [
+                                for (final file in pickedFiles)
+                                  ListTile(
+                                    dense: true,
+                                    visualDensity: const VisualDensity(
+                                      vertical: -2,
+                                    ),
+                                    leading: const Icon(
+                                      Icons.insert_drive_file_outlined,
+                                    ),
+                                    title: Text(
+                                      file.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          formatBytes(file.lengthSync() ?? 0),
+                                        ),
+                                        IconButton(
+                                          tooltip: '移除',
+                                          onPressed: busy
+                                              ? null
+                                              : () => setState(
+                                                  () =>
+                                                      pickedFiles.remove(file),
+                                                ),
+                                          icon: const Icon(Icons.close),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
                             ),
-                          )
-                          .toList(),
-                      onChanged: (v) => setState(() => minutes = v!),
-                    ),
-                    const SizedBox(height: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        TextFormField(
-                          controller: name,
-                          decoration: const InputDecoration(
-                            labelText: '名称（可选）',
-                            hintText: '为这个分享取一个名称',
                           ),
                         ),
-                        if (kind == ServiceKind.web) ...[
-                          const SizedBox(height: 16),
-                          ...webFields(),
-                        ],
                       ],
-                    ),
+                    ] else ...[
+                      if (kind == ServiceKind.ssh) ...[
+                        const SizedBox(height: 16),
+                        sshUserField(),
+                      ],
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: host,
+                        decoration: const InputDecoration(
+                          labelText: '目标地址',
+                          hintText: '127.0.0.1 或设备的 IP 地址',
+                        ),
+                        validator: (s) => s == null || s.trim().isEmpty
+                            ? '请输入 IP 或主机名'
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: port,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: '目标端口',
+                          hintText: '例如 22 或 8080',
+                        ),
+                        validator: validatePort,
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<int>(
+                        initialValue: minutes,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: '自动停止分享'),
+                        items: [0, 15, 30, 60]
+                            .map(
+                              (m) => DropdownMenuItem(
+                                value: m,
+                                child: Text(m == 0 ? '手动停止' : '$m 分钟后'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() => minutes = v!),
+                      ),
+                      const SizedBox(height: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          TextFormField(
+                            controller: name,
+                            decoration: const InputDecoration(
+                              labelText: '名称（可选）',
+                              hintText: '为这个分享取一个名称',
+                            ),
+                          ),
+                          if (kind == ServiceKind.web) ...[
+                            const SizedBox(height: 16),
+                            ...webFields(),
+                          ],
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     editorAction(context, '启动并生成连接卡'),
                   ],
@@ -1207,7 +1393,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
         : '请输入有效的 SSH 用户名',
   );
 
-  Widget serviceKinds() => Column(
+  Widget serviceKinds({bool lockFile = false}) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Text('服务用途', style: Theme.of(context).textTheme.labelLarge),
@@ -1219,6 +1405,7 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                 value: value,
                 label: Text(value.label),
                 icon: Icon(kindIcon(value), size: 18),
+                enabled: !lockFile || value == ServiceKind.file,
               ),
             )
             .toList(),
@@ -1233,6 +1420,8 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
                       ? '22'
                       : kind == ServiceKind.web
                       ? '80'
+                      : kind == ServiceKind.file
+                      ? '2222'
                       : '';
                 }
               }),
@@ -1285,7 +1474,11 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       if (!parsed) return;
     }
     if (!form.currentState!.validate()) return;
-    if (validatePort(port.text) != null) {
+    if (kind == ServiceKind.file && !widget.connect && pickedFiles.isEmpty) {
+      message(context, '请先选择要分享的文件');
+      return;
+    }
+    if (kind != ServiceKind.file && validatePort(port.text) != null) {
       message(context, '请输入 1–65535 的远端端口');
       return;
     }
@@ -1298,13 +1491,25 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       return;
     }
     setState(() => busy = true);
-    final p = int.parse(port.text);
+    final p = kind == ServiceKind.file ? 2222 : int.parse(port.text);
+    String filesDir = '';
+    try {
+      if (kind == ServiceKind.file && !widget.connect) {
+        filesDir = await stageFiles();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => busy = false);
+        message(context, '无法准备所选文件：$e');
+      }
+      return;
+    }
     final config = ConnectionConfig(
       mode: widget.connect ? 'connect' : 'share',
       kind: kind,
       port: p,
-      host: host.text.trim(),
-      name: name.text.trim(),
+      host: kind == ServiceKind.file ? '' : host.text.trim(),
+      name: kind == ServiceKind.file ? '' : name.text.trim(),
       address: address,
       localPort: local.text.isEmpty
           ? (widget.connect ? 0 : p)
@@ -1313,8 +1518,11 @@ class _ServiceEditorState extends ConsumerState<ServiceEditor> {
       webScheme: scheme,
       webPath: webPath.text,
       sshUser: kind == ServiceKind.ssh ? sshUser.text.trim() : '',
+      filesDir: filesDir,
     );
-    final t = await ref.read(tasksProvider).start(config, minutes: minutes);
+    final t = await ref
+        .read(tasksProvider)
+        .start(config, minutes: kind == ServiceKind.file ? 0 : minutes);
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
@@ -1337,6 +1545,9 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
     with WidgetsBindingObserver {
   late final Tasks taskStore;
   bool opened = false, webOpened = false;
+  final Set<String> selectedFiles = {};
+  bool selectingDestination = false;
+  bool fileSelectionInitialized = false;
   Timer? clock;
   @override
   void initState() {
@@ -1411,6 +1622,10 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
   Widget build(BuildContext context) {
     final store = ref.watch(tasksProvider);
     final t = widget.task;
+    if (!fileSelectionInitialized && t.files.isNotEmpty) {
+      selectedFiles.addAll(t.files.map((file) => file['name'] as String));
+      fileSelectionInitialized = true;
+    }
     if (widget.showShare && !opened && t.address.isNotEmpty && t.active) {
       opened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1430,15 +1645,16 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
       appBar: AppBar(
         title: const Text('任务详情'),
         actions: [
-          IconButton(
-            tooltip: store.isFavorite(t.config) ? '取消收藏配置' : '收藏配置',
-            onPressed: () => store.favorite(t.config),
-            icon: Icon(
-              store.isFavorite(t.config)
-                  ? Icons.star_rounded
-                  : Icons.star_outline_rounded,
+          if (t.config.kind != ServiceKind.file)
+            IconButton(
+              tooltip: store.isFavorite(t.config) ? '取消收藏配置' : '收藏配置',
+              onPressed: () => store.favorite(t.config),
+              icon: Icon(
+                store.isFavorite(t.config)
+                    ? Icons.star_rounded
+                    : Icons.star_outline_rounded,
+              ),
             ),
-          ),
           if (!t.active)
             PopupMenuButton<String>(
               tooltip: '任务选项',
@@ -1516,9 +1732,64 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
                         },
                       ),
                       const SizedBox(height: 16),
-                      if (t.config.mode == 'share')
+                      if (t.config.kind == ServiceKind.file &&
+                          t.config.mode == 'share')
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '只读分享 · ${Directory(t.config.filesDir).existsSync() ? Directory(t.config.filesDir).listSync().whereType<File>().length : 0} 个文件',
+                            ),
+                            if (Directory(t.config.filesDir).existsSync()) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                constraints: const BoxConstraints(
+                                  maxHeight: 220,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xfff3f5f1),
+                                  border: Border.all(
+                                    color: const Color(0xffdce4de),
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Scrollbar(
+                                  child: ListView(
+                                    shrinkWrap: true,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 4,
+                                    ),
+                                    children: [
+                                      for (final file in Directory(
+                                        t.config.filesDir,
+                                      ).listSync().whereType<File>())
+                                        ListTile(
+                                          dense: true,
+                                          visualDensity: const VisualDensity(
+                                            vertical: -2,
+                                          ),
+                                          leading: const Icon(
+                                            Icons.insert_drive_file_outlined,
+                                          ),
+                                          title: Text(
+                                            file.uri.pathSegments.last,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          trailing: Text(
+                                            formatBytes(file.lengthSync()),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        )
+                      else if (t.config.mode == 'share')
                         SelectableText('目标 ${t.config.host}:${t.config.port}')
-                      else ...[
+                      else if (t.config.kind != ServiceKind.file) ...[
                         SelectableText(
                           '远端端口 ${t.config.port} → ${t.active ? '本机' : '原本机'} ${t.localPort > 0 ? t.localAddress : '尚未分配'}',
                         ),
@@ -1540,66 +1811,77 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
                       ],
                       const SizedBox(height: 12),
                       const SizedBox(height: 12),
-                      Text(
-                        t.latencyMs == null
-                            ? t.path
-                            : '${t.path} · ${t.latencyMs!.toStringAsFixed(1)} ms',
-                        style: Theme.of(context).textTheme.bodyMedium
-                            ?.copyWith(color: green),
-                      ),
+                      if (t.config.kind == ServiceKind.file)
+                        Text(
+                          t.config.mode == 'share'
+                              ? '文件通过临时连接卡只读分享。'
+                              : t.files.isEmpty
+                              ? '正在读取发送方的文件清单。'
+                              : '已读取 ${t.files.length} 个文件，可选择后下载。',
+                        )
+                      else
+                        Text(
+                          t.latencyMs == null
+                              ? t.path
+                              : '${t.path} · ${t.latencyMs!.toStringAsFixed(1)} ms',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: green),
+                        ),
                       const SizedBox(height: 20),
-                      const Divider(),
-                      const SizedBox(height: 12),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final values = <(String, String)>[
-                            (
-                              '运行时长',
-                              '${t.duration.inMinutes} 分 ${t.duration.inSeconds % 60} 秒',
-                            ),
-                            if (t.config.mode == 'share')
-                              ('当前连接', '${t.active ? t.clients : 0}'),
-                            ('发送', formatBytes(t.up)),
-                            ('接收', formatBytes(t.down)),
-                          ];
-                          final columns = constraints.maxWidth >= 500
-                              ? values.length
-                              : 2;
-                          final width =
-                              (constraints.maxWidth - (columns - 1) * 16) /
-                              columns;
-                          return Wrap(
-                            spacing: 16,
-                            runSpacing: 16,
-                            children: [
-                              for (final value in values)
-                                SizedBox(
-                                  width: width,
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        value.$1,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(color: Colors.grey),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        value.$2,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium,
-                                      ),
-                                    ],
+                      if (t.config.kind != ServiceKind.file) ...[
+                        const Divider(),
+                        const SizedBox(height: 12),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final values = <(String, String)>[
+                              (
+                                '运行时长',
+                                '${t.duration.inMinutes} 分 ${t.duration.inSeconds % 60} 秒',
+                              ),
+                              if (t.config.mode == 'share')
+                                ('当前连接', '${t.active ? t.clients : 0}'),
+                              ('发送', formatBytes(t.up)),
+                              ('接收', formatBytes(t.down)),
+                            ];
+                            final columns = constraints.maxWidth >= 500
+                                ? values.length
+                                : 2;
+                            final width =
+                                (constraints.maxWidth - (columns - 1) * 16) /
+                                columns;
+                            return Wrap(
+                              spacing: 16,
+                              runSpacing: 16,
+                              children: [
+                                for (final value in values)
+                                  SizedBox(
+                                    width: width,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          value.$1,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(color: Colors.grey),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          value.$2,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium,
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                            ],
-                          );
-                        },
-                      ),
+                              ],
+                            );
+                          },
+                        ),
+                      ],
                       if (t.active && t.stopAt != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
@@ -1643,104 +1925,301 @@ class _TaskDetailState extends ConsumerState<TaskDetail>
                   ),
                 ),
               ),
+              if (t.config.kind == ServiceKind.file &&
+                  t.config.mode == 'connect') ...[
+                const SizedBox(height: 24),
+                fileReceiveSection(context, t, store),
+              ],
               const SizedBox(height: 24),
-              Card(
-                margin: EdgeInsets.zero,
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const Expanded(child: Text('连接诊断')),
-                          if (t.active)
-                            IconButton(
-                              tooltip: t.checking ? '正在检查连接' : '检查连接',
-                              onPressed: t.checking
-                                  ? null
-                                  : () => store.control(t, 'check'),
-                              icon: t.checking
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
+              if (t.config.kind != ServiceKind.file) ...[
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(child: Text('连接诊断')),
+                            if (t.active)
+                              IconButton(
+                                tooltip: t.checking ? '正在检查连接' : '检查连接',
+                                onPressed: t.checking
+                                    ? null
+                                    : () => store.control(t, 'check'),
+                                icon: t.checking
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.refresh_rounded,
+                                        size: 20,
                                       ),
-                                    )
-                                  : const Icon(Icons.refresh_rounded, size: 20),
+                              ),
+                            IconButton(
+                              tooltip: '复制诊断（已隐藏连接凭据）',
+                              onPressed: () =>
+                                  copy(context, diagnosticSummary(t)),
+                              icon: const Icon(Icons.copy_rounded, size: 20),
                             ),
-                          IconButton(
-                            tooltip: '复制诊断（已隐藏连接凭据）',
-                            onPressed: () =>
-                                copy(context, diagnosticSummary(t)),
-                            icon: const Icon(Icons.copy_rounded, size: 20),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      info('开始时间', clockTime(t.started)),
-                      if (t.ended != null) info('结束时间', clockTime(t.ended!)),
-                      info('连接路径', t.path == '核心未报告连接路径' ? '路径信息暂不可用' : t.path),
-                      if (t.latencyMs != null)
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        info('开始时间', clockTime(t.started)),
+                        if (t.ended != null) info('结束时间', clockTime(t.ended!)),
                         info(
-                          '最近延迟',
-                          '${t.latencyMs!.toStringAsFixed(1)} ms · ${t.measuredAt == null ? '' : clockTime(t.measuredAt!.toLocal())} ${t.checkFailed || DateTime.now().difference(t.measuredAt ?? t.started).inSeconds > 30 ? '（上次测量）' : ''}',
+                          '连接路径',
+                          t.path == '核心未报告连接路径' ? '路径信息暂不可用' : t.path,
                         ),
-                      if (t.relay.isNotEmpty) info('中继区域', t.relay),
-                      if (t.targetReady != null) info('目标服务', targetLabel(t)),
-                      if (t.diagnostic.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Notice(
-                            '${t.diagnostic}${t.diagnosticAt == null || t.checking ? '' : ' · ${clockTime(t.diagnosticAt!)}'}',
-                            error: t.checkFailed,
+                        if (t.latencyMs != null)
+                          info(
+                            '最近延迟',
+                            '${t.latencyMs!.toStringAsFixed(1)} ms · ${t.measuredAt == null ? '' : clockTime(t.measuredAt!.toLocal())} ${t.checkFailed || DateTime.now().difference(t.measuredAt ?? t.started).inSeconds > 30 ? '（上次测量）' : ''}',
                           ),
+                        if (t.relay.isNotEmpty) info('中继区域', t.relay),
+                        if (t.targetReady != null) info('目标服务', targetLabel(t)),
+                        if (t.diagnostic.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Notice(
+                              '${t.diagnostic}${t.diagnosticAt == null || t.checking ? '' : ' · ${clockTime(t.diagnosticAt!)}'}',
+                              error: t.checkFailed,
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                        const Divider(),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '事件记录',
+                          style: TextStyle(color: Colors.grey, fontSize: 12),
                         ),
-                      const SizedBox(height: 12),
-                      const Divider(),
-                      const SizedBox(height: 12),
-                      const Text(
-                        '事件记录',
-                        style: TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
-                      const SizedBox(height: 8),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 240),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              if (t.logs.isEmpty)
-                                const Text(
-                                  '暂无关键事件',
-                                  style: TextStyle(color: Colors.grey),
-                                ),
-                              for (final log in t.logs)
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 4,
+                        const SizedBox(height: 8),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 240),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (t.logs.isEmpty)
+                                  const Text(
+                                    '暂无关键事件',
+                                    style: TextStyle(color: Colors.grey),
                                   ),
-                                  child: SelectableText(
-                                    log,
-                                    style: const TextStyle(
-                                      fontFamily: 'monospace',
-                                      fontSize: 12,
+                                for (final log in t.logs)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 4,
+                                    ),
+                                    child: SelectableText(
+                                      log,
+                                      style: const TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                      ),
                                     ),
                                   ),
-                                ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget fileReceiveSection(
+    BuildContext context,
+    TunnelTask task,
+    Tasks store,
+  ) {
+    final ready = task.files.isNotEmpty;
+    final downloading = task.transferActive || task.savingFiles.isNotEmpty;
+    final pendingSelection = selectedFiles.difference(task.downloadedFiles);
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('共享文件', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (!task.filesListed)
+              const LinearProgressIndicator()
+            else if (!ready)
+              const Text('发送方没有可下载文件。')
+            else ...[
+              for (final file in task.files)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value:
+                      !task.downloadedFiles.contains(file['name']) &&
+                      selectedFiles.contains(file['name']),
+                  onChanged:
+                      task.active &&
+                          !task.downloadedFiles.contains(file['name'])
+                      ? (selected) => setState(() {
+                          final name = file['name'] as String;
+                          if (selected == true) {
+                            selectedFiles.add(name);
+                          } else {
+                            selectedFiles.remove(name);
+                          }
+                        })
+                      : null,
+                  title: Text(file['name'] as String),
+                  subtitle: Text(
+                    task.fileErrors[file['name']] ??
+                        formatBytes(file['size'] as int? ?? 0),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  secondary: const Icon(Icons.insert_drive_file_outlined),
+                  controlAffinity: ListTileControlAffinity.leading,
+                ),
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                onPressed:
+                    !task.active ||
+                        pendingSelection.isEmpty ||
+                        selectingDestination ||
+                        downloading
+                    ? null
+                    : () async {
+                        setState(() => selectingDestination = true);
+                        String? destination;
+                        if (Platform.isAndroid) {
+                          task.destinationUri =
+                              await store.pickDestination() ?? '';
+                          if (task.destinationUri.isNotEmpty) {
+                            destination = task.destinationUri;
+                          }
+                        } else {
+                          destination = await FilePicker.getDirectoryPath();
+                        }
+                        if (!mounted) return;
+                        setState(() => selectingDestination = false);
+                        if (destination == null || destination.isEmpty) return;
+                        if (Platform.isAndroid) {
+                          task.destinationPath = '';
+                        } else {
+                          task.destinationPath = destination;
+                        }
+                        final temp = await getTemporaryDirectory();
+                        final downloadDir = Directory(
+                          '${temp.path}${Platform.pathSeparator}tailtap-received${Platform.pathSeparator}${task.id}-${DateTime.now().microsecondsSinceEpoch}',
+                        );
+                        await downloadDir.create(recursive: true);
+                        await store.control(
+                          task,
+                          'download',
+                          files: pendingSelection.toList(),
+                          directory: downloadDir.path,
+                        );
+                      },
+                icon: selectingDestination
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_outlined),
+                label: const Text('接收所选文件'),
+              ),
+              if (task.transferActive || task.fileProgress.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _transferProgress(task),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _transferProgress(TunnelTask task) {
+    final selectedNames = selectedFiles.difference(task.downloadedFiles);
+    final trackingNames = selectedNames.isEmpty && task.transferActive
+        ? task.files.map((file) => file['name'] as String).toSet()
+        : selectedNames;
+    final selectedFilesInfo = task.files
+        .where((file) => trackingNames.contains(file['name']))
+        .toList();
+    final totalBytes = selectedFilesInfo.fold<int>(
+      0,
+      (sum, file) => sum + (file['size'] as int? ?? 0),
+    );
+    final progressItems = task.fileProgress.values
+        .where((item) => trackingNames.contains(item['name']))
+        .toList();
+    final completedBytes = progressItems.fold<int>(
+      0,
+      (sum, item) => sum + (item['copied'] as int? ?? 0),
+    );
+    Map<String, dynamic>? current;
+    for (final item in progressItems) {
+      final name = item['name'];
+      if (!task.downloadedFiles.contains(name) &&
+          !task.fileErrors.containsKey(name) &&
+          (item['copied'] as int? ?? 0) < (item['size'] as int? ?? 0)) {
+        current = item;
+        break;
+      }
+    }
+    final currentCopied = current?['copied'] as int? ?? 0;
+    final currentSize = current?['size'] as int? ?? 0;
+    double fraction(int value, int total) =>
+        total <= 0 ? 0 : (value / total).clamp(0.0, 1.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '总进度 · ${formatBytes(completedBytes)} / ${formatBytes(totalBytes)}',
+        ),
+        const SizedBox(height: 6),
+        LinearProgressIndicator(
+          value: task.transferActive ? fraction(completedBytes, totalBytes) : 1,
+        ),
+        if (current != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            '当前文件 · ${current['name']} · ${formatBytes(currentCopied)} / ${formatBytes(currentSize)}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 6),
+          LinearProgressIndicator(value: fraction(currentCopied, currentSize)),
+        ],
+        for (final progress in progressItems)
+          if (task.downloadedFiles.contains(progress['name']) ||
+              task.savingFiles.contains(progress['name']) ||
+              task.fileErrors.containsKey(progress['name']) ||
+              !task.transferActive)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                task.downloadedFiles.contains(progress['name'])
+                    ? '已保存：${progress['name']}'
+                    : task.savingFiles.contains(progress['name'])
+                    ? '正在保存：${progress['name']}'
+                    : task.fileErrors.containsKey(progress['name'])
+                    ? '失败：${progress['name']} · ${task.fileErrors[progress['name']]}'
+                    : '已中断：${progress['name']} · ${formatBytes(progress['copied'] as int? ?? 0)} / ${formatBytes(progress['size'] as int? ?? 0)}',
+              ),
+            ),
+      ],
     );
   }
 

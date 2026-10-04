@@ -47,7 +47,7 @@ macOS 构建使用：
 ./scripts/build-desktop.sh --x86_64 --release
 ```
 
-Android APK 输出到 `build/app/outputs/flutter-apk/`。macOS 应用输出到 `build/macos/Build/Products/Debug/TailTap.app` 或 `Release/TailTap.app`。Android 构建需要 NDK，路径可通过 `ANDROID_NDK_HOME` 指定。
+直接使用 `flutter build apk` 时需要显式指定 `--target-platform android-arm64` 或 `android-x64`：原生核心只覆盖这两个 ABI，缺少对应核心时构建会失败。Android APK 输出到 `build/app/outputs/flutter-apk/`。macOS 应用输出到 `build/macos/Build/Products/Debug/TailTap.app` 或 `Release/TailTap.app`。Android 构建需要 NDK，路径可通过 `ANDROID_NDK_HOME` 指定。
 
 GitHub Actions 会在默认分支有新提交时构建所有支持的平台。也可以在仓库的 **Actions → Build desktop and Android packages → Run workflow** 手动启动，并选择单个平台或全部平台。完成后从对应运行记录的 **Artifacts** 下载构建包。产物使用 `tailtap_<版本>_<系统>_<架构>` 命名，Windows/macOS 为 ZIP，Linux 为 tar.gz，Android 为 APK；架构名遵循 Go 命名（`amd64`、`arm64`）。
 

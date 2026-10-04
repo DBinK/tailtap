@@ -3,15 +3,18 @@ package engine
 import (
 	"context"
 	"fmt"
-	"github.com/tailscale/tailcat"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tailscale/tailcat"
 )
 
 type Config struct {
+	Kind             string `json:"kind"`
+	FilesDir         string `json:"filesDir"`
 	StopAfterSeconds int    `json:"stopAfterSeconds"`
 	Mode             string `json:"mode"`
 	Host             string `json:"host"`
@@ -24,6 +27,20 @@ type Config struct {
 func Validate(c Config) error {
 	if c.Mode != "share" && c.Mode != "connect" {
 		return fmt.Errorf("无效任务类型")
+	}
+	if c.Kind == "file" {
+		if c.Port != 2222 {
+			return fmt.Errorf("文件服务端口无效")
+		}
+		if c.Mode == "share" && c.FilesDir == "" {
+			return fmt.Errorf("没有可分享的文件")
+		}
+		if c.Mode == "connect" {
+			if _, err := tailcat.ParseAddr(tailcat.Addr(c.Address)); err != nil {
+				return fmt.Errorf("连接地址无效")
+			}
+		}
+		return nil
 	}
 	if c.Port < 1 || c.Port > 65535 || c.LocalPort < 0 || c.LocalPort > 65535 {
 		return fmt.Errorf("端口范围为 1–65535")
@@ -42,8 +59,10 @@ func Validate(c Config) error {
 }
 
 type Command struct {
-	Action  string `json:"action"`
-	Visible bool   `json:"visible"`
+	Action    string   `json:"action"`
+	Visible   bool     `json:"visible"`
+	Files     []string `json:"files"`
+	Directory string   `json:"directory"`
 }
 
 func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
@@ -53,6 +72,9 @@ func Run(ctx context.Context, c Config, emit func(map[string]any)) error {
 func RunControlled(ctx context.Context, c Config, emit func(map[string]any), commands <-chan Command) error {
 	if err := Validate(c); err != nil {
 		return err
+	}
+	if c.Kind == "file" {
+		return runFileTask(ctx, c, emit, commands)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

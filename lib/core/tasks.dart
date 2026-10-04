@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/connection.dart';
@@ -22,6 +23,15 @@ class TunnelTask {
   bool checkFailed = false, checking = false;
   DateTime? diagnosticAt;
   List<Map<String, dynamic>> peers = [];
+  List<Map<String, dynamic>> files = [];
+  bool filesListed = false;
+  final Map<String, Map<String, dynamic>> fileProgress = {};
+  final Map<String, String> fileErrors = {};
+  final Set<String> downloadedFiles = {};
+  final Set<String> savingFiles = {};
+  String destinationUri = '';
+  String destinationPath = '';
+  bool transferActive = false;
   int localPort = 0, clients = 0, up = 0, down = 0;
   bool? targetReady;
   bool? tunnelReady;
@@ -106,8 +116,60 @@ class Tasks extends ChangeNotifier {
         /* No native service is running. */
       }
     }
+    await _sweepStaleStagingDirectories();
     loaded = true;
     notifyListeners();
+  }
+
+  /// Removes staging directories left behind by tasks that ended without a
+  /// Flutter-side cleanup, such as a stop from the Android notification or a
+  /// killed process.
+  Future<void> _sweepStaleStagingDirectories() async {
+    final referenced = <String>{
+      for (final task in tasks)
+        if (task.config.filesDir.isNotEmpty) task.config.filesDir,
+      for (final task in tasks)
+        ...task.fileProgress.values
+            .map((progress) => progress['directory'] as String?)
+            .whereType<String>(),
+    };
+    final taskIds = tasks.map((task) => task.id).toSet();
+    final roots = <Directory>[];
+    try {
+      final support = await getApplicationSupportDirectory();
+      roots.add(
+        Directory('${support.path}${Platform.pathSeparator}tailtap-shares'),
+      );
+      final temporary = await getTemporaryDirectory();
+      roots.add(
+        Directory('${temporary.path}${Platform.pathSeparator}tailtap-received'),
+      );
+    } catch (_) {
+      return; // Staging directories are unavailable on this platform.
+    }
+    // Anything staged in the last minute belongs to the current session and
+    // may not be referenced by a task yet. Leftovers from earlier runs are
+    // still older than that, so the guard costs at most one delayed sweep.
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 1));
+    for (final root in roots) {
+      try {
+        if (!await root.exists()) continue;
+        await for (final entry in root.list()) {
+          if (entry is! Directory) continue;
+          final name = entry.path.split(Platform.pathSeparator).last;
+          final owner = name.contains('-')
+              ? name.substring(0, name.indexOf('-'))
+              : '';
+          if (referenced.contains(entry.path) || taskIds.contains(owner)) {
+            continue;
+          }
+          if ((await entry.stat()).modified.isAfter(cutoff)) continue;
+          await entry.delete(recursive: true);
+        }
+      } catch (_) {
+        // A leftover directory must not block startup.
+      }
+    }
   }
 
   Future<void> save() async {
@@ -134,6 +196,8 @@ class Tasks extends ChangeNotifier {
     TunnelTask task,
     String action, {
     bool visible = false,
+    List<String> files = const [],
+    String directory = '',
   }) async {
     if (!task.active) return;
     final requestTime = DateTime.now();
@@ -153,7 +217,28 @@ class Tasks extends ChangeNotifier {
         }
       });
     }
-    final command = {'action': action, 'visible': visible};
+    final command = {
+      'action': action,
+      'visible': visible,
+      if (files.isNotEmpty) 'files': files,
+      if (directory.isNotEmpty) 'directory': directory,
+    };
+    if (action == 'download') {
+      final previousDirectories = files
+          .map((name) => task.fileProgress[name]?['directory'] as String?)
+          .whereType<String>()
+          .toSet();
+      for (final path in previousDirectories) {
+        final directory = Directory(path);
+        if (await directory.exists()) await directory.delete(recursive: true);
+      }
+      for (final name in files) {
+        final previous = task.fileErrors.remove(name);
+        if (previous != null && task.error == previous) task.error = '';
+      }
+      task.transferActive = true;
+      notifyListeners();
+    }
     try {
       if (Platform.isAndroid) {
         await _channel.invokeMethod<bool>('control', {
@@ -165,11 +250,15 @@ class Tasks extends ChangeNotifier {
       }
     } on StateError {
       /* The process may have just closed. */
+      if (action == 'download') task.transferActive = false;
     } on PlatformException {
       /* Diagnostics must not stop a tunnel. */
+      if (action == 'download') task.transferActive = false;
     } on MissingPluginException {
       /* No native core in widget tests. */
+      if (action == 'download') task.transferActive = false;
     }
+    if (action == 'download') notifyListeners();
   }
 
   @override
@@ -230,10 +319,10 @@ class Tasks extends ChangeNotifier {
           'id': task.id,
           'config': coreConfig,
         });
-        recent.removeWhere((c) => c.encode() == config.encode());
-        recent.insert(0, config);
-        if (recent.length > 12) {
-          recent.removeLast();
+        if (config.kind != ServiceKind.file) {
+          recent.removeWhere((c) => c.encode() == config.encode());
+          recent.insert(0, config);
+          if (recent.length > 12) recent.removeLast();
         }
         unawaited(save());
         if (minutes > 0) {
@@ -280,6 +369,7 @@ class Tasks extends ChangeNotifier {
             task.state = task.state == 'stopping' ? 'stopped' : 'failed';
             if (task.state == 'failed') {
               task.error = '核心进程已退出（$code），请重新启动';
+              unawaited(_cleanupTaskFiles(task));
             }
           }
           task.autoStop?.cancel();
@@ -287,10 +377,10 @@ class Tasks extends ChangeNotifier {
           notifyListeners();
         }),
       );
-      recent.removeWhere((c) => c.encode() == config.encode());
-      recent.insert(0, config);
-      if (recent.length > 12) {
-        recent.removeLast();
+      if (config.kind != ServiceKind.file) {
+        recent.removeWhere((c) => c.encode() == config.encode());
+        recent.insert(0, config);
+        if (recent.length > 12) recent.removeLast();
       }
       unawaited(save());
       if (minutes > 0) {
@@ -299,6 +389,7 @@ class Tasks extends ChangeNotifier {
     } catch (e) {
       task.state = 'failed';
       task.ended = DateTime.now();
+      await _cleanupTaskFiles(task);
       task.error = e is FormatException
           ? e.message
           : e is PlatformException
@@ -318,8 +409,12 @@ class Tasks extends ChangeNotifier {
     if (event['state'] != null) {
       final previous = task.state;
       task.state = event['state'] as String;
+      // Every way a task can end must release its staged copies, including a
+      // stop issued from the Android notification without a Dart call.
+      if (!task.active) unawaited(_cleanupTaskFiles(task));
       if (task.state == 'stopped') {
         task.address = '';
+        task.transferActive = false;
       }
       if (previous != task.state) _log(task, '状态 · ${task.label}');
       if (!task.active) task.ended ??= DateTime.now();
@@ -360,6 +455,28 @@ class Tasks extends ChangeNotifier {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
     }
+    if (event['files'] is List) {
+      task.filesListed = true;
+      task.files = (event['files'] as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    }
+    if (event['fileProgress'] is Map) {
+      final progress = Map<String, dynamic>.from(event['fileProgress'] as Map);
+      final name = progress['name'] as String?;
+      if (name != null) task.fileProgress[name] = progress;
+    }
+    if (event['fileError'] is String && event['error'] is String) {
+      task.fileErrors[event['fileError'] as String] = event['error'] as String;
+    }
+    if (event['downloadDone'] == true) task.transferActive = false;
+    if (event['fileComplete'] is String) {
+      final name = event['fileComplete'] as String;
+      if (task.destinationUri.isNotEmpty || task.destinationPath.isNotEmpty) {
+        task.savingFiles.add(name);
+        unawaited(_copyDownloadedFile(task, name));
+      }
+    }
     final diagnostic = event['diagnostic'] as String?;
     if (diagnostic != null) {
       final requested = task.checking;
@@ -385,6 +502,101 @@ class Tasks extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _copyDownloadedFile(TunnelTask task, String name) async {
+    final progress = task.fileProgress[name];
+    final directory = progress?['directory'] as String?;
+    if (directory == null) return;
+    try {
+      if (Platform.isAndroid && task.destinationUri.isNotEmpty) {
+        await _channel.invokeMethod<void>('copyToTree', {
+          'treeUri': task.destinationUri,
+          'sourcePath': '$directory${Platform.pathSeparator}$name',
+          'name': name,
+        });
+      } else {
+        final destination = Directory(task.destinationPath);
+        var outputName = name;
+        final dot = name.lastIndexOf('.');
+        final stem = dot > 0 ? name.substring(0, dot) : name;
+        final ext = dot > 0 ? name.substring(dot) : '';
+        var suffix = 2;
+        final source = File('$directory${Platform.pathSeparator}$name');
+        late File target;
+        while (true) {
+          target = File(
+            '${destination.path}${Platform.pathSeparator}$outputName',
+          );
+          try {
+            await target.create(exclusive: true);
+            break;
+          } on FileSystemException catch (e) {
+            // Only a taken name may advance the suffix. An unwritable or
+            // missing directory must surface instead of retrying forever.
+            if (!_nameTaken(e)) rethrow;
+            if (suffix > 1000) {
+              throw const FileSystemException('目标目录中同名文件过多');
+            }
+            outputName = '$stem ($suffix)$ext';
+            suffix++;
+          }
+        }
+        final output = target.openWrite();
+        try {
+          await output.addStream(source.openRead());
+          await output.flush();
+        } catch (_) {
+          await output.close();
+          await target.delete().catchError((_) => target);
+          rethrow;
+        }
+        try {
+          await output.close();
+        } catch (_) {
+          await target.delete().catchError((_) => target);
+          rethrow;
+        }
+      }
+      final temporary = File('$directory${Platform.pathSeparator}$name');
+      if (await temporary.exists()) await temporary.delete();
+      task.downloadedFiles.add(name);
+      final previous = task.fileErrors.remove(name);
+      if (previous != null && task.error == previous) task.error = '';
+      task.savingFiles.remove(name);
+      notifyListeners();
+    } on PlatformException catch (e) {
+      task.fileErrors[name] = e.message ?? '无法保存到所选目录';
+      task.error = task.fileErrors[name]!;
+      task.savingFiles.remove(name);
+      notifyListeners();
+    } on FileSystemException catch (e) {
+      task.fileErrors[name] = '无法保存文件：${e.message}';
+      task.error = task.fileErrors[name]!;
+      task.savingFiles.remove(name);
+      notifyListeners();
+    } catch (e) {
+      task.fileErrors[name] = '无法保存文件：$e';
+      task.error = task.fileErrors[name]!;
+      task.savingFiles.remove(name);
+      notifyListeners();
+    }
+  }
+
+  bool _nameTaken(FileSystemException error) {
+    final code = error.osError?.errorCode;
+    if (code == null) return false;
+    // EEXIST on POSIX; ERROR_FILE_EXISTS / ERROR_ALREADY_EXISTS on Windows.
+    return Platform.isWindows ? (code == 80 || code == 183) : code == 17;
+  }
+
+  Future<String?> pickDestination() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<String>('pickDestination');
+    } on PlatformException {
+      return null;
+    }
+  }
+
   void _log(TunnelTask task, String message) {
     task.logs.add(
       '${DateTime.now().toLocal().toIso8601String().substring(11, 19)}  $message',
@@ -397,6 +609,7 @@ class Tasks extends ChangeNotifier {
       return;
     }
     task.state = 'stopping';
+    task.transferActive = false;
     _log(task, '正在停止任务');
     task.autoStop?.cancel();
     notifyListeners();
@@ -413,6 +626,7 @@ class Tasks extends ChangeNotifier {
       task.state = 'stopped';
       task.ended ??= DateTime.now();
       task.address = '';
+      await _cleanupTaskFiles(task);
       notifyListeners();
       return;
     }
@@ -429,7 +643,27 @@ class Tasks extends ChangeNotifier {
     task.state = 'stopped';
     task.ended ??= DateTime.now();
     task.address = '';
+    await _cleanupTaskFiles(task);
     notifyListeners();
+  }
+
+  Future<void> _cleanupTaskFiles(TunnelTask task) async {
+    if (task.config.kind != ServiceKind.file) {
+      return;
+    }
+    if (task.config.mode == 'share' && task.config.filesDir.isNotEmpty) {
+      final directory = Directory(task.config.filesDir);
+      if (await directory.exists()) await directory.delete(recursive: true);
+      return;
+    }
+    final directories = task.fileProgress.values
+        .map((progress) => progress['directory'] as String?)
+        .whereType<String>()
+        .toSet();
+    for (final path in directories) {
+      final directory = Directory(path);
+      if (await directory.exists()) await directory.delete(recursive: true);
+    }
   }
 
   Future<void> stopAll() async {
@@ -457,6 +691,7 @@ class Tasks extends ChangeNotifier {
     for (final t in tasks) {
       t.autoStop?.cancel();
       t.process?.kill();
+      unawaited(_cleanupTaskFiles(t).catchError((_) {}));
     }
     super.dispose();
   }
