@@ -233,7 +233,8 @@ class Tasks extends ChangeNotifier {
         if (await directory.exists()) await directory.delete(recursive: true);
       }
       for (final name in files) {
-        task.fileErrors.remove(name);
+        final previous = task.fileErrors.remove(name);
+        if (previous != null && task.error == previous) task.error = '';
       }
       task.transferActive = true;
       notifyListeners();
@@ -528,7 +529,13 @@ class Tasks extends ChangeNotifier {
           try {
             await target.create(exclusive: true);
             break;
-          } on FileSystemException {
+          } on FileSystemException catch (e) {
+            // Only a taken name may advance the suffix. An unwritable or
+            // missing directory must surface instead of retrying forever.
+            if (!_nameTaken(e)) rethrow;
+            if (suffix > 1000) {
+              throw const FileSystemException('目标目录中同名文件过多');
+            }
             outputName = '$stem ($suffix)$ext';
             suffix++;
           }
@@ -552,7 +559,8 @@ class Tasks extends ChangeNotifier {
       final temporary = File('$directory${Platform.pathSeparator}$name');
       if (await temporary.exists()) await temporary.delete();
       task.downloadedFiles.add(name);
-      task.fileErrors.remove(name);
+      final previous = task.fileErrors.remove(name);
+      if (previous != null && task.error == previous) task.error = '';
       task.savingFiles.remove(name);
       notifyListeners();
     } on PlatformException catch (e) {
@@ -571,6 +579,13 @@ class Tasks extends ChangeNotifier {
       task.savingFiles.remove(name);
       notifyListeners();
     }
+  }
+
+  bool _nameTaken(FileSystemException error) {
+    final code = error.osError?.errorCode;
+    if (code == null) return false;
+    // EEXIST on POSIX; ERROR_FILE_EXISTS / ERROR_ALREADY_EXISTS on Windows.
+    return Platform.isWindows ? (code == 80 || code == 183) : code == 17;
   }
 
   Future<String?> pickDestination() async {
