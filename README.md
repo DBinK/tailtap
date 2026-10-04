@@ -49,7 +49,7 @@ macOS 构建使用：
 
 Android APK 输出到 `build/app/outputs/flutter-apk/`。macOS 应用输出到 `build/macos/Build/Products/Debug/TailTap.app` 或 `Release/TailTap.app`。Android 构建需要 NDK，路径可通过 `ANDROID_NDK_HOME` 指定。
 
-GitHub Actions 会在默认分支有新提交时构建 macOS arm64 与 Android arm64 发布包。也可以在仓库的 **Actions → Build desktop and Android packages → Run workflow** 手动启动，并选择单个平台或全部平台。完成后从对应运行记录的 **Artifacts** 下载构建包。产物使用 `tailtap_<版本>_<系统>_arm64` 命名；macOS 为 ZIP，Android 为 APK。
+GitHub Actions 会在默认分支有新提交时构建所有支持的平台。也可以在仓库的 **Actions → Build desktop and Android packages → Run workflow** 手动启动，并选择单个平台或全部平台。完成后从对应运行记录的 **Artifacts** 下载构建包。产物使用 `tailtap_<版本>_<系统>_<架构>` 命名，Windows/macOS 为 ZIP，Linux 为 tar.gz，Android 为 APK；架构名遵循 Go 命名（`amd64`、`arm64`）。
 
 本机连接测试脚本位于 `scripts/`，使用 `uv run scripts/test_device.py <adb-device-id>` 可运行 Android 隧道集成测试。跨设备测试需要连接的 Android 设备和已配置的 Termux SSH 主机。
 
