@@ -1,12 +1,13 @@
 import 'dart:convert';
 
-enum ServiceKind { port, ssh, web }
+enum ServiceKind { port, ssh, web, file }
 
 extension ServiceLabel on ServiceKind {
   String get label => switch (this) {
     ServiceKind.port => '端口',
     ServiceKind.ssh => 'SSH',
     ServiceKind.web => '网页',
+    ServiceKind.file => '文件',
   };
 }
 
@@ -23,13 +24,19 @@ class ConnectionConfig {
     this.webScheme = 'http',
     this.webPath = '/',
     this.sshUser = '',
+    this.filesDir = '',
   });
   final String mode, host, name, address, webScheme, webPath;
   final String sshUser;
+  final String filesDir;
   final ServiceKind kind;
   final int port, localPort;
   final bool lan;
-  String get title => name.isEmpty ? '${kind.label} · $port' : name;
+  String get title => name.isEmpty
+      ? kind == ServiceKind.file
+            ? '文件分享'
+            : '${kind.label} · $port'
+      : name;
 
   ConnectionConfig copyWith({
     String? mode,
@@ -43,6 +50,7 @@ class ConnectionConfig {
     String? webScheme,
     String? webPath,
     String? sshUser,
+    String? filesDir,
   }) => ConnectionConfig(
     mode: mode ?? this.mode,
     kind: kind ?? this.kind,
@@ -55,6 +63,7 @@ class ConnectionConfig {
     webScheme: webScheme ?? this.webScheme,
     webPath: webPath ?? this.webPath,
     sshUser: sshUser ?? this.sshUser,
+    filesDir: filesDir ?? this.filesDir,
   );
 
   Map<String, dynamic> toJson() => {
@@ -69,6 +78,7 @@ class ConnectionConfig {
     'webScheme': webScheme,
     'webPath': webPath,
     'sshUser': sshUser,
+    'filesDir': filesDir,
   };
   factory ConnectionConfig.fromJson(Map<String, dynamic> j) => ConnectionConfig(
     mode: j['mode'] as String,
@@ -82,6 +92,7 @@ class ConnectionConfig {
     webScheme: j['webScheme'] as String? ?? 'http',
     webPath: j['webPath'] as String? ?? '/',
     sshUser: j['sshUser'] as String? ?? '',
+    filesDir: j['filesDir'] as String? ?? '',
   );
   String card(String addr) => Uri(
     scheme: 'tailtap',
@@ -138,15 +149,15 @@ class ConnectionConfig {
     if (!RegExp(r'^tc[A-Za-z0-9_-]{20,4096}$').hasMatch(address)) {
       throw const FormatException('连接卡中的 tailcat 地址无效');
     }
-    final port = int.tryParse(q['port'] ?? '') ?? 0;
-    if (port < 1 || port > 65535) {
-      throw const FormatException('远端端口范围为 1–65535');
-    }
     final kind = ServiceKind.values
         .where((k) => k.name == q['kind'])
         .firstOrNull;
     if (kind == null) {
       throw const FormatException('尚不支持此服务类型');
+    }
+    final port = int.tryParse(q['port'] ?? '') ?? 0;
+    if (port < 1 || port > 65535) {
+      throw const FormatException('远端端口范围为 1–65535');
     }
     final user = q['user'] ?? '';
     if (user.isNotEmpty && !validSshUser(user)) {
