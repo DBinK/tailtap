@@ -83,6 +83,12 @@ class MyApp extends StatelessWidget {
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
+      // DirectWrite falls back to Yu Gothic for Han glyphs on Windows, which
+      // renders Chinese text with Japanese glyph variants. Pin a Chinese
+      // fallback so Latin stays on Segoe UI and Han stays on YaHei.
+      fontFamilyFallback: Platform.isWindows
+          ? const ['Microsoft YaHei UI', 'Microsoft YaHei']
+          : null,
       scaffoldBackgroundColor: const Color(0xfff6f7f3),
       colorScheme: ColorScheme.fromSeed(
         seedColor: green,
@@ -2418,7 +2424,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings> {
   }
 
   Future<void> loadSetting() async {
-    if (Platform.isMacOS) {
+    if (Platform.isMacOS || Platform.isWindows) {
       try {
         keepRunning =
             await channel.invokeMethod<bool>('getKeepRunning') ?? true;
@@ -2431,7 +2437,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings> {
 
   Future<void> setKeepRunning(bool value) async {
     setState(() => keepRunning = value);
-    if (Platform.isMacOS) {
+    if (Platform.isMacOS || Platform.isWindows) {
       await channel.invokeMethod<void>('setKeepRunning', value);
     }
   }
@@ -2442,10 +2448,12 @@ class _BackgroundSettingsState extends State<BackgroundSettings> {
     body: ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        if (Platform.isMacOS) ...[
+        if (Platform.isMacOS || Platform.isWindows) ...[
           formSwitch(
             title: '关闭窗口后继续运行',
-            subtitle: '任务会留在菜单栏。选择“退出 TailTap”会停止全部任务。',
+            subtitle: Platform.isWindows
+                ? '任务会留在通知区域。选择“退出 TailTap”会停止全部任务。'
+                : '任务会留在菜单栏。选择“退出 TailTap”会停止全部任务。',
             value: keepRunning,
             onChanged: loaded ? setKeepRunning : null,
           ),

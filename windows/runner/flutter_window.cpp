@@ -27,6 +27,10 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  tray_icon_ = std::make_unique<TrayIcon>(GetHandle(),
+                                          flutter_controller_->engine()
+                                              ->messenger());
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +44,9 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Drop the tray first: it must remove its icon and unregister its channel
+  // handler while the window handle is still valid.
+  tray_icon_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -51,6 +58,17 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (tray_icon_ && tray_icon_->HandleMessage(message, wparam, lparam)) {
+    return 0;
+  }
+
+  // Closing the window hides it while the tray should keep the app alive.
+  if (message == WM_CLOSE && tray_icon_ && tray_icon_->keep_running() &&
+      !tray_icon_->quitting()) {
+    tray_icon_->HideMainWindow();
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

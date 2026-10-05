@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "tray_icon.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -28,6 +29,9 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // The notification-area icon, null when it could not be created.
+  std::unique_ptr<TrayIcon> tray_icon_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

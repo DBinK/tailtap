@@ -59,7 +59,7 @@ final tasksProvider = ChangeNotifierProvider<Tasks>((ref) => Tasks());
 
 class Tasks extends ChangeNotifier {
   Tasks() {
-    if (Platform.isMacOS) {
+    if (Platform.isMacOS || Platform.isWindows) {
       _tray.setMethodCallHandler((call) async {
         if (call.method == 'stopAll') await stopAll();
       });
@@ -264,7 +264,7 @@ class Tasks extends ChangeNotifier {
   @override
   void notifyListeners() {
     super.notifyListeners();
-    if (Platform.isMacOS) unawaited(_syncMacTray());
+    if (Platform.isMacOS || Platform.isWindows) unawaited(_syncMacTray());
   }
 
   Future<void> _syncMacTray() async {
@@ -282,7 +282,7 @@ class Tasks extends ChangeNotifier {
         'summary': summary,
       });
     } on MissingPluginException {
-      // The macOS app may not have finished registering its status item yet.
+      // The native app may not have finished registering its tray yet.
     } on PlatformException {
       // Tray availability must not affect tunnel tasks.
     }

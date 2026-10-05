@@ -9,8 +9,12 @@
 - 显示文件传输总进度与当前文件进度。
 - 增加桌面窗口尺寸下的响应式布局检查。
 - 增加 Windows 构建脚本 `scripts/build-desktop.ps1`。
+- Windows 提供通知区域图标，关闭窗口后任务继续运行。
 
 ### Changed
 - 优化文件分享表单、文件清单和连接卡布局。
 - macOS 窗口最小内容尺寸设为 720 × 600 logical pixels。
 - Android 构建会检查目标 ABI 对应的原生核心是否可用。
+
+### Fixed
+- 修正 Windows 上汉字回退到日文字形的问题。
