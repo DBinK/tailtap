@@ -48,5 +48,5 @@ case "$(uname -s)" in
    (cd core && CGO_ENABLED=0 GOARCH="$goarch" go build -o bin/tailtap-core ./cmd/tailtap)
    cp core/bin/tailtap-core "$bundle/tailtap-core"
    ;;
- *) echo 'For Windows, build the Go core and copy tailtap-core.exe beside the app executable.' ;;
+ *) echo 'For Windows, run scripts/build-desktop.ps1 in PowerShell.' ;;
 esac
